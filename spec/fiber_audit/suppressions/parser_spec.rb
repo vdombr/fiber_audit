@@ -9,15 +9,22 @@ require 'yaml'
 RSpec.describe FiberAudit::Suppressions::Parser do
   describe 'standalone loading' do
     it 'can be required independently without the main loader' do
-      result = `ruby -Ilib -rfiber_audit/suppressions/parser -e "puts FiberAudit::Suppressions::Parser.parse_inline('test.rb', '').inspect" 2>&1`
-      expect($?.success?).to be(true)
-      expect(result.strip).to eq('[]')
+      cmd = 'ruby -Ilib -rfiber_audit/suppressions/parser' \
+            ' -e "puts FiberAudit::Suppressions::Parser' \
+            ".parse_inline('test.rb', '').inspect\""
+      output = `#{cmd} 2>&1`
+      status = $?
+      expect(status).to be_success
+      expect(output.strip).to eq('[]')
     end
 
     it 'explicitly requires errors.rb' do
-      result = `ruby -Ilib -rfiber_audit/suppressions/parser -e "puts FiberAudit::ConfigurationError" 2>&1`
-      expect($?.success?).to be(true)
-      expect(result.strip).to eq('FiberAudit::ConfigurationError')
+      cmd = 'ruby -Ilib -rfiber_audit/suppressions/parser' \
+            ' -e "puts FiberAudit::ConfigurationError"'
+      output = `#{cmd} 2>&1`
+      status = $?
+      expect(status).to be_success
+      expect(output.strip).to eq('FiberAudit::ConfigurationError')
     end
   end
 
@@ -30,11 +37,15 @@ RSpec.describe FiberAudit::Suppressions::Parser do
           y = 2
         RUBY
 
-        result = described_class.parse_inline('app/services/worker.rb', content)
+        result = described_class.parse_inline(
+          'app/services/worker.rb', content
+        )
 
         expect(result.size).to eq(1)
         sup = result.first
-        expect(sup).to be_a(FiberAudit::Suppressions::InlineSuppression)
+        expect(sup).to be_a(
+          FiberAudit::Suppressions::InlineSuppression
+        )
         expect(sup.rule_id).to eq('FA1001')
         expect(sup.reason).to eq('runs in background job')
         expect(sup.path).to eq('app/services/worker.rb')
@@ -69,7 +80,9 @@ RSpec.describe FiberAudit::Suppressions::Parser do
           y = 2
         RUBY
 
-        result = described_class.parse_inline('app/tasks/migrate.rb', content)
+        result = described_class.parse_inline(
+          'app/tasks/migrate.rb', content
+        )
 
         expect(result.size).to eq(1)
         sup = result.first
@@ -119,14 +132,16 @@ RSpec.describe FiberAudit::Suppressions::Parser do
     end
 
     context 'missing reason' do
-      it 'raises ConfigurationError for single-line form without reason' do
+      it 'raises ConfigurationError for single-line without reason' do
         content = <<~RUBY
           x = 1 # fiber-audit:disable FA1001
         RUBY
 
         expect do
           described_class.parse_inline('test.rb', content)
-        end.to raise_error(FiberAudit::ConfigurationError, /missing reason/)
+        end.to raise_error(
+          FiberAudit::ConfigurationError, /missing reason/
+        )
       end
 
       it 'raises ConfigurationError for block form without reason' do
@@ -137,7 +152,9 @@ RSpec.describe FiberAudit::Suppressions::Parser do
 
         expect do
           described_class.parse_inline('test.rb', content)
-        end.to raise_error(FiberAudit::ConfigurationError, /missing reason/)
+        end.to raise_error(
+          FiberAudit::ConfigurationError, /missing reason/
+        )
       end
     end
 
@@ -162,7 +179,7 @@ RSpec.describe FiberAudit::Suppressions::Parser do
     end
 
     context 'directives inside strings' do
-      it 'does NOT create suppressions for directives inside double-quoted strings' do
+      it 'does NOT create suppressions inside double-quoted strings' do
         content = <<~RUBY
           x = "fiber-audit:disable FA1001 -- inside string"
           y = 1
@@ -172,7 +189,7 @@ RSpec.describe FiberAudit::Suppressions::Parser do
         expect(result).to be_empty
       end
 
-      it 'does NOT create suppressions for directives inside single-quoted strings' do
+      it 'does NOT create suppressions inside single-quoted strings' do
         content = <<~RUBY
           x = 'fiber-audit:disable FA1001 -- inside string'
           y = 1
@@ -184,7 +201,7 @@ RSpec.describe FiberAudit::Suppressions::Parser do
     end
 
     context 'directives inside heredocs' do
-      it 'does NOT create suppressions for directives inside heredocs' do
+      it 'does NOT create suppressions for directives in heredocs' do
         content = <<~RUBY
           text = <<~HEREDOC
             fiber-audit:disable FA1001 -- inside heredoc
@@ -196,7 +213,7 @@ RSpec.describe FiberAudit::Suppressions::Parser do
         expect(result).to be_empty
       end
 
-      it 'does NOT create suppressions for directives inside heredocs with interpolation' do
+      it 'does NOT create suppressions in heredocs with interpolation' do
         content = <<~RUBY
           text = <<-HEREDOC
             fiber-audit:disable FA1002 -- also inside
@@ -210,7 +227,7 @@ RSpec.describe FiberAudit::Suppressions::Parser do
     end
 
     context 'directives inside regex literals' do
-      it 'does NOT create suppressions for directives inside regex literals' do
+      it 'does NOT create suppressions for directives in regex' do
         content = <<~RUBY
           x = /fiber-audit:disable FA1001 -- inside regex/
           y = 1
@@ -220,7 +237,7 @@ RSpec.describe FiberAudit::Suppressions::Parser do
         expect(result).to be_empty
       end
 
-      it 'does NOT end blocks for enable directives inside regex literals' do
+      it 'does NOT end blocks for enable directives inside regex' do
         content = <<~RUBY
           # fiber-audit:disable FA1001 -- legacy code
           system(cmd)
@@ -233,13 +250,13 @@ RSpec.describe FiberAudit::Suppressions::Parser do
         expect(result.size).to eq(1)
         sup = result.first
         expect(sup.rule_id).to eq('FA1001')
-        # Block should extend to EOF since the enable is in a regex, not a comment
+        # Enable is in regex, not a comment: block extends to EOF
         expect(sup.end_line).to eq(5)
       end
     end
 
     context 'enable directives in strings do not end blocks' do
-      it 'does NOT end blocks for enable directives inside strings' do
+      it 'does NOT end blocks for enable in double-quoted strings' do
         content = <<~RUBY
           # fiber-audit:disable FA1001 -- legacy code
           system(cmd)
@@ -252,7 +269,7 @@ RSpec.describe FiberAudit::Suppressions::Parser do
         expect(result.size).to eq(1)
         sup = result.first
         expect(sup.rule_id).to eq('FA1001')
-        # Block should extend to EOF since the enable is in a string, not a comment
+        # Enable is in string, not comment: block extends to EOF
         expect(sup.end_line).to eq(5)
       end
 
@@ -271,7 +288,7 @@ RSpec.describe FiberAudit::Suppressions::Parser do
         expect(result.size).to eq(1)
         sup = result.first
         expect(sup.rule_id).to eq('FA1002')
-        # Block should extend to EOF since the enable is in a heredoc, not a comment
+        # Enable is in heredoc, not comment: block extends to EOF
         expect(sup.end_line).to eq(7)
       end
     end
@@ -289,10 +306,10 @@ RSpec.describe FiberAudit::Suppressions::Parser do
 
         result = described_class.parse_inline('test.rb', content)
         expect(result.size).to eq(2)
-        
+
         fa1001 = result.find { |s| s.rule_id == 'FA1001' }
         fa1002 = result.find { |s| s.rule_id == 'FA1002' }
-        
+
         expect(fa1001.start_line).to eq(1)
         expect(fa1001.end_line).to eq(4)
         expect(fa1002.start_line).to eq(2)
@@ -312,7 +329,7 @@ RSpec.describe FiberAudit::Suppressions::Parser do
 
         result = described_class.parse_inline('test.rb', content)
         expect(result.size).to eq(2)
-        
+
         expect(result[0].start_line).to eq(1)
         expect(result[0].end_line).to eq(3)
         expect(result[1].start_line).to eq(5)
@@ -321,7 +338,7 @@ RSpec.describe FiberAudit::Suppressions::Parser do
     end
 
     context 'block vs trailing comment distinction' do
-      it 'treats comment with only whitespace before it as block comment' do
+      it 'treats whitespace-only prefix as block comment' do
         content = <<~RUBY
             # fiber-audit:disable FA1001 -- reason
           code
@@ -346,11 +363,11 @@ RSpec.describe FiberAudit::Suppressions::Parser do
         expect(result.size).to eq(1)
         sup = result.first
         expect(sup.rule_id).to eq('FA1001')
-        # Trailing comment: only suppresses the line it's on
+        # Trailing: only suppresses the line it is on
         expect(sup.start_line).to eq(sup.end_line)
       end
 
-      it 'distinguishes between block and trailing on different lines' do
+      it 'distinguishes between block and trailing on lines' do
         content = <<~RUBY
           # fiber-audit:disable FA1001 -- block
           code1
@@ -360,14 +377,16 @@ RSpec.describe FiberAudit::Suppressions::Parser do
 
         result = described_class.parse_inline('test.rb', content)
         expect(result.size).to eq(2)
-        
+
         block_sup = result.find { |s| s.rule_id == 'FA1001' }
         trailing_sup = result.find { |s| s.rule_id == 'FA1002' }
-        
+
         # Block extends to EOF
         expect(block_sup.end_line).to eq(4)
         # Trailing only suppresses its own line
-        expect(trailing_sup.start_line).to eq(trailing_sup.end_line)
+        expect(trailing_sup.start_line).to eq(
+          trailing_sup.end_line
+        )
       end
     end
   end
@@ -378,14 +397,22 @@ RSpec.describe FiberAudit::Suppressions::Parser do
     end
 
     it 'returns empty array when file does not exist' do
-      expect(described_class.parse_yaml('/nonexistent/suppressions.yml')).to eq([])
+      path = '/nonexistent/suppressions.yml'
+      expect(described_class.parse_yaml(path)).to eq([])
     end
 
     it 'parses valid YAML suppressions' do
       yaml_content = {
         'suppressions' => [
-          { 'rule' => 'FA1001', 'symbol' => 'DataMigration#run', 'reason' => 'Offline task' },
-          { 'rule' => 'FA1003', 'reason' => 'Known safe lock' }
+          {
+            'rule' => 'FA1001',
+            'symbol' => 'DataMigration#run',
+            'reason' => 'Offline task'
+          },
+          {
+            'rule' => 'FA1003',
+            'reason' => 'Known safe lock'
+          }
         ]
       }
 
@@ -397,7 +424,9 @@ RSpec.describe FiberAudit::Suppressions::Parser do
 
         expect(result.size).to eq(2)
 
-        expect(result[0]).to be_a(FiberAudit::Suppressions::YamlSuppression)
+        expect(result[0]).to be_a(
+          FiberAudit::Suppressions::YamlSuppression
+        )
         expect(result[0].rule).to eq('FA1001')
         expect(result[0].symbol).to eq('DataMigration#run')
         expect(result[0].operation).to be_nil
@@ -412,7 +441,11 @@ RSpec.describe FiberAudit::Suppressions::Parser do
     it 'parses YAML suppression with operation' do
       yaml_content = {
         'suppressions' => [
-          { 'rule' => 'FA1001', 'operation' => 'Open3.capture3', 'reason' => 'Wrapped safely' }
+          {
+            'rule' => 'FA1001',
+            'operation' => 'Open3.capture3',
+            'reason' => 'Wrapped safely'
+          }
         ]
       }
 
@@ -440,7 +473,9 @@ RSpec.describe FiberAudit::Suppressions::Parser do
 
         expect do
           described_class.parse_yaml(path)
-        end.to raise_error(FiberAudit::ConfigurationError, /missing 'reason'/)
+        end.to raise_error(
+          FiberAudit::ConfigurationError, /missing 'reason'/
+        )
       end
     end
 
@@ -457,14 +492,19 @@ RSpec.describe FiberAudit::Suppressions::Parser do
 
         expect do
           described_class.parse_yaml(path)
-        end.to raise_error(FiberAudit::ConfigurationError, /missing 'reason'/)
+        end.to raise_error(
+          FiberAudit::ConfigurationError, /missing 'reason'/
+        )
       end
     end
 
     it 'returns empty array for empty suppressions list' do
       Dir.mktmpdir do |dir|
         path = File.join(dir, 'suppressions.yml')
-        File.write(path, YAML.dump({ 'suppressions' => [] }))
+        File.write(
+          path,
+          YAML.dump({ 'suppressions' => [] })
+        )
 
         result = described_class.parse_yaml(path)
         expect(result).to eq([])
