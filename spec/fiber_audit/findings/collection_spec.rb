@@ -21,20 +21,92 @@ RSpec.describe FiberAudit::Collection do
     )
   end
 
-  describe '#each' do
-    it 'iterates over all findings' do
+  def make_finding_without_evidence(rule_id:, **_extras)
+    FiberAudit::Finding.new(
+      rule_id: rule_id,
+      category: :blocking_io,
+      severity: :high,
+      confidence: :confirmed,
+      location: location,
+      message: 'no evidence finding',
+      evidence: []
+    )
+  end
+
+  # ── WP-3R: constructor evidence invariant ──────────────────────────
+
+  describe '.new (constructor)' do
+    it 'raises EmptyEvidenceError when any initial finding has empty evidence' do
+      good = make_finding(rule_id: 'FIB001', severity: :high)
+      bad = make_finding_without_evidence(rule_id: 'FIB002')
+
+      expect { described_class.new([good, bad]) }.to raise_error(
+        FiberAudit::EmptyEvidenceError,
+        /FIB002.*cannot be published without evidence/
+      )
+    end
+
+    it 'raises EmptyEvidenceError when any initial finding has nil evidence' do
+      bad = FiberAudit::Finding.new(
+        rule_id: 'FIB003',
+        category: :blocking_io,
+        severity: :high,
+        confidence: :confirmed,
+        location: location,
+        message: 'nil evidence',
+        evidence: nil
+      )
+
+      expect { described_class.new([bad]) }.to raise_error(
+        FiberAudit::EmptyEvidenceError,
+        /FIB003.*cannot be published without evidence/
+      )
+    end
+
+    it 'succeeds when all initial findings have evidence' do
       f1 = make_finding(rule_id: 'A', severity: :high)
       f2 = make_finding(rule_id: 'B', severity: :low)
-      collection = described_class.new([f1, f2])
 
-      expect(collection.map(&:rule_id)).to eq(%w[A B])
+      expect { described_class.new([f1, f2]) }.not_to raise_error
+      expect(described_class.new([f1, f2]).size).to eq(2)
     end
 
-    it 'is Enumerable' do
-      collection = described_class.new
-      expect(collection).to be_a(Enumerable)
+    it 'succeeds with no arguments (empty collection)' do
+      expect { described_class.new }.not_to raise_error
+      expect(described_class.new).to be_empty
+    end
+
+    it 'succeeds with an empty array' do
+      expect { described_class.new([]) }.not_to raise_error
+      expect(described_class.new([])).to be_empty
     end
   end
+
+  # ── WP-3R: input-array non-aliasing ────────────────────────────────
+
+  describe 'input-array non-aliasing' do
+    it 'does not share identity with the input array' do
+      f = make_finding(rule_id: 'A', severity: :high)
+      input = [f]
+      collection = described_class.new(input)
+
+      expect(collection.to_a).not_to equal(input)
+    end
+
+    it 'is not affected by mutations to the input array after construction' do
+      f1 = make_finding(rule_id: 'A', severity: :high)
+      f2 = make_finding(rule_id: 'B', severity: :low)
+      input = [f1]
+      collection = described_class.new(input)
+
+      input << f2 # mutate the original array
+
+      expect(collection.size).to eq(1)
+      expect(collection.map(&:rule_id)).to eq(%w[A])
+    end
+  end
+
+  # ── WP-3R: #add evidence enforcement ───────────────────────────────
 
   describe '#add' do
     it 'adds a finding to the collection' do
@@ -53,15 +125,7 @@ RSpec.describe FiberAudit::Collection do
 
     it 'raises EmptyEvidenceError when evidence is empty' do
       collection = described_class.new
-      finding = FiberAudit::Finding.new(
-        rule_id: 'FIB001',
-        category: :blocking_io,
-        severity: :high,
-        confidence: :confirmed,
-        location: location,
-        message: 'no evidence finding',
-        evidence: []
-      )
+      finding = make_finding_without_evidence(rule_id: 'FIB001')
 
       expect { collection.add(finding) }.to raise_error(
         FiberAudit::EmptyEvidenceError,
@@ -101,6 +165,53 @@ RSpec.describe FiberAudit::Collection do
 
       expect { collection.add(finding) }.not_to raise_error
       expect(collection.size).to eq(1)
+    end
+
+    it 'supports chaining multiple adds' do
+      collection = described_class.new
+      f1 = make_finding(rule_id: 'A', severity: :high)
+      f2 = make_finding(rule_id: 'B', severity: :low)
+
+      collection.add(f1).add(f2)
+
+      expect(collection.size).to eq(2)
+      expect(collection.map(&:rule_id)).to eq(%w[A B])
+    end
+  end
+
+  # ── WP-3R: standalone require ──────────────────────────────────────
+
+  describe 'standalone require' do
+    it 'can be required without loading the full gem entry point' do
+      # Verify the file declares its own dependency on fiber_audit/errors
+      collection_source = File.read(
+        File.expand_path('../../../../lib/fiber_audit/findings/collection.rb', __dir__)
+      )
+      expect(collection_source).to include("require 'fiber_audit/errors'")
+    end
+
+    it 'does not define EmptyEvidenceError itself (uses shared errors.rb)' do
+      collection_source = File.read(
+        File.expand_path('../../../../lib/fiber_audit/findings/collection.rb', __dir__)
+      )
+      expect(collection_source).not_to match(/class\s+EmptyEvidenceError/)
+    end
+  end
+
+  # ── Preserved existing behavior ────────────────────────────────────
+
+  describe '#each' do
+    it 'iterates over all findings' do
+      f1 = make_finding(rule_id: 'A', severity: :high)
+      f2 = make_finding(rule_id: 'B', severity: :low)
+      collection = described_class.new([f1, f2])
+
+      expect(collection.map(&:rule_id)).to eq(%w[A B])
+    end
+
+    it 'is Enumerable' do
+      collection = described_class.new
+      expect(collection).to be_a(Enumerable)
     end
   end
 

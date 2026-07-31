@@ -1,13 +1,14 @@
 # frozen_string_literal: true
 
-module FiberAudit
-  class EmptyEvidenceError < StandardError; end
+require 'fiber_audit/errors'
 
+module FiberAudit
   class Collection
     include Enumerable
 
     def initialize(findings = [])
-      @findings = Array(findings)
+      @findings = Array(findings).dup
+      @findings.each { |f| validate_evidence!(f) }
     end
 
     def each(&)
@@ -15,10 +16,7 @@ module FiberAudit
     end
 
     def add(finding)
-      if finding.evidence.nil? || finding.evidence.empty?
-        raise EmptyEvidenceError,
-              "Finding #{finding.rule_id} (#{finding.fingerprint[0, 8]}) cannot be published without evidence"
-      end
+      validate_evidence!(finding)
       @findings << finding
       self
     end
@@ -46,6 +44,15 @@ module FiberAudit
 
     def to_h_for_json
       @findings.map(&:to_h_for_json)
+    end
+
+    private
+
+    def validate_evidence!(finding)
+      if finding.evidence.nil? || finding.evidence.empty?
+        raise EmptyEvidenceError,
+              "Finding #{finding.rule_id} (#{finding.fingerprint[0, 8]}) cannot be published without evidence"
+      end
     end
   end
 end
