@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-require 'fiber_audit/errors'
+require_relative '../errors'
 
 module FiberAudit
   class Collection
@@ -49,10 +49,10 @@ module FiberAudit
     private
 
     def validate_evidence!(finding)
-      if finding.evidence.nil? || finding.evidence.empty?
-        raise EmptyEvidenceError,
-              "Finding #{finding.rule_id} (#{finding.fingerprint[0, 8]}) cannot be published without evidence"
-      end
+      return if finding.evidence&.any?
+
+      raise EmptyEvidenceError,
+            "Finding #{finding.rule_id} (#{finding.fingerprint[0, 8]}) cannot be published without evidence"
     end
   end
 end

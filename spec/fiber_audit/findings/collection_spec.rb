@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require 'spec_helper'
+require 'open3'
 
 RSpec.describe FiberAudit::Collection do
   let(:location) { FiberAudit::Location.new(path: 'test.rb', line: 1, column: 0) }
@@ -182,19 +183,27 @@ RSpec.describe FiberAudit::Collection do
   # ── WP-3R: standalone require ──────────────────────────────────────
 
   describe 'standalone require' do
+    let(:repo_root) { File.expand_path('../../../', __dir__) }
+
     it 'can be required without loading the full gem entry point' do
-      # Verify the file declares its own dependency on fiber_audit/errors
-      collection_source = File.read(
-        File.expand_path('../../../../lib/fiber_audit/findings/collection.rb', __dir__)
+      script = "require 'fiber_audit/findings/collection'; puts FiberAudit::Collection"
+      stdout, status = Open3.capture2(
+        'ruby', '-I', File.join(repo_root, 'lib'), '-e', script
       )
-      expect(collection_source).to include("require 'fiber_audit/errors'")
+      expect(status).to be_success
+      expect(stdout.strip).to include('FiberAudit::Collection')
     end
 
-    it 'does not define EmptyEvidenceError itself (uses shared errors.rb)' do
-      collection_source = File.read(
-        File.expand_path('../../../../lib/fiber_audit/findings/collection.rb', __dir__)
+    it 'provides EmptyEvidenceError via shared errors module' do
+      script = <<~RUBY
+        require 'fiber_audit/findings/collection'
+        puts FiberAudit::EmptyEvidenceError
+      RUBY
+      stdout, status = Open3.capture2(
+        'ruby', '-I', File.join(repo_root, 'lib'), '-e', script
       )
-      expect(collection_source).not_to match(/class\s+EmptyEvidenceError/)
+      expect(status).to be_success
+      expect(stdout.strip).to include('FiberAudit::EmptyEvidenceError')
     end
   end
 
