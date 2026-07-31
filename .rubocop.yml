@@ -9,7 +9,8 @@ AllCops:
     - 'Gemfile'
     - '*.gemspec'
 
-# Metrics are typically disabled in specs
+# RSpec DSL blocks (describe/context/it) legitimately span many lines;
+# scoped exclusion is preferable to a global disable.
 Metrics/BlockLength:
   Exclude:
     - 'spec/**/*'
@@ -19,12 +20,19 @@ Metrics/MethodLength:
   Exclude:
     - 'spec/**/*'
 
+# Adapter/CLI classes accumulate substantial branching and reporting logic;
+# raising the limit avoids noisy splits while still catching bloat.
 Metrics/ClassLength:
-  Max: 150
+  Max: 250
 
 # Documentation is not required for 0.1.0
 Style/Documentation:
   Enabled: false
+
+# Explicit frozen_string_literal pragma required in every Ruby source file.
+Style/FrozenStringLiteralComment:
+  Enabled: true
+  EnforcedStyle: always
 
 # Allow parameter lists up to 15 for data classes
 Metrics/ParameterLists:

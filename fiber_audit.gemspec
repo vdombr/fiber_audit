@@ -12,6 +12,11 @@ Gem::Specification.new do |spec|
 
   spec.required_ruby_version = '>= 3.2.0'
 
+  spec.metadata['rubygems_mfa_required'] = 'true'
+  spec.metadata['homepage_uri'] = spec.homepage
+  spec.metadata['source_code_uri'] = spec.homepage
+  spec.metadata['changelog_uri'] = "#{spec.homepage}/blob/main/CHANGELOG.md"
+
   spec.files         = Dir['lib/**/*.rb', 'bin/*', 'README.md', 'CHANGELOG.md', '.fiber-audit.example.yml']
   spec.bindir        = 'bin'
   spec.executables   = ['fiber-audit']
@@ -20,8 +25,5 @@ Gem::Specification.new do |spec|
   spec.add_dependency 'prism'
   spec.add_dependency 'rubydex', '~> 0.2.0'
 
-  # Development dependencies
-  spec.add_development_dependency 'rake',    '~> 13.0'
-  spec.add_development_dependency 'rspec',   '~> 3.12'
-  spec.add_development_dependency 'rubocop', '~> 1.50'
+  # Development dependencies moved to Gemfile to resolve Gemspec/DevelopmentDependencies
 end
