@@ -4,14 +4,14 @@ require 'spec_helper'
 require 'fiber_audit/configuration'
 require 'tmpdir'
 require 'yaml'
+require 'open3'
 
 RSpec.describe FiberAudit::Configuration do
   describe 'standalone loading' do
     it 'can be required independently without the main loader' do
       cmd = 'ruby -Ilib -rfiber_audit/configuration' \
             ' -e "puts FiberAudit::Configuration.new.static_include.first"'
-      output = `#{cmd} 2>&1`
-      status = $?
+      output, _stderr, status = Open3.capture3(cmd)
       expect(status).to be_success
       expect(output.strip).to eq('app/**/*.rb')
     end
@@ -19,8 +19,7 @@ RSpec.describe FiberAudit::Configuration do
     it 'explicitly requires errors.rb' do
       cmd = 'ruby -Ilib -rfiber_audit/configuration' \
             ' -e "puts FiberAudit::ConfigurationError"'
-      output = `#{cmd} 2>&1`
-      status = $?
+      output, _stderr, status = Open3.capture3(cmd)
       expect(status).to be_success
       expect(output.strip).to eq('FiberAudit::ConfigurationError')
     end
@@ -28,8 +27,7 @@ RSpec.describe FiberAudit::Configuration do
     it 'explicitly requires findings/severity.rb' do
       cmd = 'ruby -Ilib -rfiber_audit/configuration' \
             ' -e "puts FiberAudit::Severity::LEVELS.first"'
-      output = `#{cmd} 2>&1`
-      status = $?
+      output, _stderr, status = Open3.capture3(cmd)
       expect(status).to be_success
       expect(output.strip).to eq('critical')
     end

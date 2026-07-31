@@ -130,8 +130,8 @@ module FiberAudit
 
         sorted_allowed = allowed.sort.join(', ')
         raise ConfigurationError,
-              "unknown configuration key '#{unknown.first}' at #{path}" \
-              " (valid keys: #{sorted_allowed})"
+              "unknown configuration key '#{unknown.first}' at #{path} " \
+              "(valid keys: #{sorted_allowed})"
       end
     end
 
@@ -139,7 +139,7 @@ module FiberAudit
 
     def validate_types!(
       include_patterns, exclude_patterns, rules,
-      formats, severity, suppressions
+      formats, _severity, suppressions
     )
       unless include_patterns.is_a?(Array) &&
              include_patterns.all?(String)
@@ -179,8 +179,8 @@ module FiberAudit
       return if invalid.empty?
 
       raise ConfigurationError,
-            "report.formats contains invalid: #{invalid.inspect}" \
-            ' (valid formats: text, json)'
+            "report.formats contains invalid: #{invalid.inspect} " \
+            '(valid formats: text, json)'
     end
 
     def validate_rules!(rules)
@@ -194,9 +194,9 @@ module FiberAudit
         unless unknown.empty?
           sorted_allowed = KNOWN_RULE_KEYS.sort.join(', ')
           raise ConfigurationError,
-                "unknown configuration key '#{unknown.first}'" \
-                " in rules.#{rule_id}" \
-                " (valid keys: #{sorted_allowed})"
+                "unknown configuration key '#{unknown.first}' " \
+                "in rules.#{rule_id} " \
+                "(valid keys: #{sorted_allowed})"
         end
 
         if entry.key?('enabled') &&
@@ -224,8 +224,8 @@ module FiberAudit
                      value.to_sym
                    else
                      raise ConfigurationError,
-                           "#{path} must be a String or Symbol," \
-                           " got #{value.class}"
+                           "#{path} must be a String or Symbol, " \
+                           "got #{value.class}"
                    end
       Severity.coerce(normalized)
     rescue ArgumentError

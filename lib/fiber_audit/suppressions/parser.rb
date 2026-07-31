@@ -70,8 +70,8 @@ module FiberAudit
 
             if reason.nil? || reason.strip.empty?
               raise FiberAudit::ConfigurationError,
-                    "YAML suppression for rule #{rule} at #{path}" \
-                    " missing 'reason'"
+                    "YAML suppression for rule #{rule} at #{path} " \
+                    "missing 'reason'"
             end
 
             YamlSuppression.new(
@@ -90,8 +90,8 @@ module FiberAudit
           match = text.match(/--\s+(.+)$/)
           if match.nil? || match[1].strip.empty?
             raise FiberAudit::ConfigurationError,
-                  "Inline suppression at #{path}:#{line_number}" \
-                  ' missing reason (use -- <reason>)'
+                  "Inline suppression at #{path}:#{line_number} " \
+                  'missing reason (use -- <reason>)'
           end
           match[1].strip
         end
