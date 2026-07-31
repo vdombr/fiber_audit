@@ -12,8 +12,7 @@ RSpec.describe FiberAudit::Suppressions::Parser do
       cmd = 'ruby -Ilib -rfiber_audit/suppressions/parser' \
             ' -e "puts FiberAudit::Suppressions::Parser' \
             ".parse_inline('test.rb', '').inspect\""
-      output = `#{cmd} 2>&1`
-      status = $?
+      output, _stderr, status = Open3.capture3(cmd)
       expect(status).to be_success
       expect(output.strip).to eq('[]')
     end
@@ -21,8 +20,7 @@ RSpec.describe FiberAudit::Suppressions::Parser do
     it 'explicitly requires errors.rb' do
       cmd = 'ruby -Ilib -rfiber_audit/suppressions/parser' \
             ' -e "puts FiberAudit::ConfigurationError"'
-      output = `#{cmd} 2>&1`
-      status = $?
+      output, _stderr, status = Open3.capture3(cmd)
       expect(status).to be_success
       expect(output.strip).to eq('FiberAudit::ConfigurationError')
     end
