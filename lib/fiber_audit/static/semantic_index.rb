@@ -213,9 +213,7 @@ module FiberAudit
       # Uses to_file_path which raises NotFileUriError for non-file URIs.
       def location_file_path(loc)
         loc.to_file_path
-      rescue ::Rubydex::Location::NotFileUriError
-        nil
-      rescue StandardError
+      rescue ::Rubydex::Location::NotFileUriError, StandardError
         nil
       end
 
@@ -279,11 +277,11 @@ module FiberAudit
           ),
           RubydexGap.new(
             method: 'ancestors_external',
-            reason: 'Rubydex ancestors may not include all external/framework ancestors without explicit indexing of those dependencies'
+            reason: 'Rubydex ancestors may not include all external ancestors without explicit dependency indexing'
           ),
           RubydexGap.new(
             method: 'call_site_extraction',
-            reason: 'Rubydex tracks method references but without method names or full call context; Prism AST parsing needed'
+            reason: 'Rubydex tracks method references without names or call context; Prism AST parsing needed'
           ),
           RubydexGap.new(
             method: 'dynamic_methods',

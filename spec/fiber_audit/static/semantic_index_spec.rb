@@ -419,7 +419,7 @@ RSpec.describe FiberAudit::Static::SemanticIndex do
     end
 
     it 'documents conventions in class comments' do
-      source = File.read(__dir__ + '/../../../lib/fiber_audit/static/semantic_index.rb')
+      source = File.read(File.join(__dir__, '..', '..', '..', 'lib', 'fiber_audit', 'static', 'semantic_index.rb'))
       expect(source).to include('one-based')
       expect(source).to include('zero-based')
     end
