@@ -7,6 +7,20 @@ require 'tmpdir'
 require 'yaml'
 
 RSpec.describe FiberAudit::Suppressions::Parser do
+  describe 'standalone loading' do
+    it 'can be required independently without the main loader' do
+      result = `ruby -Ilib -rfiber_audit/suppressions/parser -e "puts FiberAudit::Suppressions::Parser.parse_inline('test.rb', '').inspect" 2>&1`
+      expect($?.success?).to be(true)
+      expect(result.strip).to eq('[]')
+    end
+
+    it 'explicitly requires errors.rb' do
+      result = `ruby -Ilib -rfiber_audit/suppressions/parser -e "puts FiberAudit::ConfigurationError" 2>&1`
+      expect($?.success?).to be(true)
+      expect(result.strip).to eq('FiberAudit::ConfigurationError')
+    end
+  end
+
   describe '.parse_inline' do
     context 'single-line form' do
       it 'parses inline disable comment on a code line' do
@@ -192,6 +206,168 @@ RSpec.describe FiberAudit::Suppressions::Parser do
 
         result = described_class.parse_inline('test.rb', content)
         expect(result).to be_empty
+      end
+    end
+
+    context 'directives inside regex literals' do
+      it 'does NOT create suppressions for directives inside regex literals' do
+        content = <<~RUBY
+          x = /fiber-audit:disable FA1001 -- inside regex/
+          y = 1
+        RUBY
+
+        result = described_class.parse_inline('test.rb', content)
+        expect(result).to be_empty
+      end
+
+      it 'does NOT end blocks for enable directives inside regex literals' do
+        content = <<~RUBY
+          # fiber-audit:disable FA1001 -- legacy code
+          system(cmd)
+          x = /fiber-audit:enable FA1001/
+          Open3.capture3(cmd)
+          y = 1
+        RUBY
+
+        result = described_class.parse_inline('test.rb', content)
+        expect(result.size).to eq(1)
+        sup = result.first
+        expect(sup.rule_id).to eq('FA1001')
+        # Block should extend to EOF since the enable is in a regex, not a comment
+        expect(sup.end_line).to eq(5)
+      end
+    end
+
+    context 'enable directives in strings do not end blocks' do
+      it 'does NOT end blocks for enable directives inside strings' do
+        content = <<~RUBY
+          # fiber-audit:disable FA1001 -- legacy code
+          system(cmd)
+          x = "# fiber-audit:enable FA1001"
+          Open3.capture3(cmd)
+          y = 1
+        RUBY
+
+        result = described_class.parse_inline('test.rb', content)
+        expect(result.size).to eq(1)
+        sup = result.first
+        expect(sup.rule_id).to eq('FA1001')
+        # Block should extend to EOF since the enable is in a string, not a comment
+        expect(sup.end_line).to eq(5)
+      end
+
+      it 'does NOT end blocks for enable directives inside heredocs' do
+        content = <<~RUBY
+          # fiber-audit:disable FA1002 -- test code
+          Thread.new { }.join
+          text = <<~HEREDOC
+            # fiber-audit:enable FA1002
+          HEREDOC
+          another_thread.join
+          y = 1
+        RUBY
+
+        result = described_class.parse_inline('test.rb', content)
+        expect(result.size).to eq(1)
+        sup = result.first
+        expect(sup.rule_id).to eq('FA1002')
+        # Block should extend to EOF since the enable is in a heredoc, not a comment
+        expect(sup.end_line).to eq(7)
+      end
+    end
+
+    context 'matching rule enables' do
+      it 'matches enable by rule ID, not by order' do
+        content = <<~RUBY
+          # fiber-audit:disable FA1001 -- first
+          # fiber-audit:disable FA1002 -- second
+          code
+          # fiber-audit:enable FA1001
+          more_code
+          # fiber-audit:enable FA1002
+        RUBY
+
+        result = described_class.parse_inline('test.rb', content)
+        expect(result.size).to eq(2)
+        
+        fa1001 = result.find { |s| s.rule_id == 'FA1001' }
+        fa1002 = result.find { |s| s.rule_id == 'FA1002' }
+        
+        expect(fa1001.start_line).to eq(1)
+        expect(fa1001.end_line).to eq(4)
+        expect(fa1002.start_line).to eq(2)
+        expect(fa1002.end_line).to eq(6)
+      end
+
+      it 'handles multiple blocks for the same rule' do
+        content = <<~RUBY
+          # fiber-audit:disable FA1001 -- first block
+          code1
+          # fiber-audit:enable FA1001
+          code2
+          # fiber-audit:disable FA1001 -- second block
+          code3
+          # fiber-audit:enable FA1001
+        RUBY
+
+        result = described_class.parse_inline('test.rb', content)
+        expect(result.size).to eq(2)
+        
+        expect(result[0].start_line).to eq(1)
+        expect(result[0].end_line).to eq(3)
+        expect(result[1].start_line).to eq(5)
+        expect(result[1].end_line).to eq(7)
+      end
+    end
+
+    context 'block vs trailing comment distinction' do
+      it 'treats comment with only whitespace before it as block comment' do
+        content = <<~RUBY
+            # fiber-audit:disable FA1001 -- reason
+          code
+          more_code
+        RUBY
+
+        result = described_class.parse_inline('test.rb', content)
+        expect(result.size).to eq(1)
+        sup = result.first
+        expect(sup.rule_id).to eq('FA1001')
+        # Block comment: extends to EOF since no enable
+        expect(sup.end_line).to eq(3)
+      end
+
+      it 'treats comment with code before it as trailing comment' do
+        content = <<~RUBY
+          code1 # fiber-audit:disable FA1001 -- reason
+          code2
+        RUBY
+
+        result = described_class.parse_inline('test.rb', content)
+        expect(result.size).to eq(1)
+        sup = result.first
+        expect(sup.rule_id).to eq('FA1001')
+        # Trailing comment: only suppresses the line it's on
+        expect(sup.start_line).to eq(sup.end_line)
+      end
+
+      it 'distinguishes between block and trailing on different lines' do
+        content = <<~RUBY
+          # fiber-audit:disable FA1001 -- block
+          code1
+          code2 # fiber-audit:disable FA1002 -- trailing
+          code3
+        RUBY
+
+        result = described_class.parse_inline('test.rb', content)
+        expect(result.size).to eq(2)
+        
+        block_sup = result.find { |s| s.rule_id == 'FA1001' }
+        trailing_sup = result.find { |s| s.rule_id == 'FA1002' }
+        
+        # Block extends to EOF
+        expect(block_sup.end_line).to eq(4)
+        # Trailing only suppresses its own line
+        expect(trailing_sup.start_line).to eq(trailing_sup.end_line)
       end
     end
   end

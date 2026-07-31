@@ -2,6 +2,7 @@
 
 require 'yaml'
 require 'prism'
+require_relative '../errors'
 
 module FiberAudit
   module Suppressions
@@ -10,63 +11,43 @@ module FiberAudit
 
     class Parser
       # Parses inline suppressions from a file's content using Prism for comment detection.
-      # Returns Array[InlineSuppression]
+      # Directives are recognized ONLY from actual Prism comments - never from raw text scans.
+      # This ensures directive text in strings, heredocs, and regex literals cannot start or end suppressions.
       def self.parse_inline(path, content)
         result = Prism.parse(content)
         return [] if result.errors.any?
 
-        result.comments.filter_map do |comment|
-          parse_suppression_comment(comment, content, path)
+        lines = content.lines
+        disables = []
+        enables = []
+
+        # Only examine actual comments from Prism
+        result.comments.each do |comment|
+          text = comment.location.slice
+          line_num = comment.location.start_line
+
+          if (match = text.match(/fiber-audit:disable\s+(FA\d+)/))
+            rule_id = match[1]
+            reason = extract_reason(text, path, line_num)
+            is_block = block_comment?(comment, lines)
+            disables << {
+              rule_id: rule_id,
+              reason: reason,
+              line: line_num,
+              block: is_block
+            }
+          elsif (match = text.match(/fiber-audit:enable\s+(FA\d+)/))
+            enables << {
+              rule_id: match[1],
+              line: line_num
+            }
+          end
         end
+
+        build_suppressions(disables, enables, lines, path)
       end
 
-      # Parse a single comment for suppression directives
-      def self.parse_suppression_comment(comment, content, path)
-        text = comment.location.slice
-        return nil unless text.match?(/fiber-audit:disable\s+FA\d+/)
-
-        rule_id = extract_rule_id(text)
-        return nil unless rule_id
-
-        reason = extract_reason(text, path, comment.location.start_line)
-        start_line = comment.location.start_line
-        end_line = calculate_end_line(content, start_line, rule_id)
-
-        InlineSuppression.new(
-          rule_id: rule_id,
-          reason: reason,
-          path: path,
-          start_line: start_line,
-          end_line: end_line
-        )
-      end
-
-      # Extract rule ID from comment text
-      def self.extract_rule_id(text)
-        match = text.match(/fiber-audit:disable\s+(FA\d+)/)
-        match ? match[1] : nil
-      end
-
-      # Extract and validate reason from comment text
-      def self.extract_reason(text, path, line_number)
-        match = text.match(/--\s+(.+)$/)
-        if match.nil? || match[1].strip.empty?
-          raise FiberAudit::ConfigurationError,
-                "Inline suppression at #{path}:#{line_number} missing reason (use -- <reason>)"
-        end
-        match[1].strip
-      end
-
-      # Calculate end line based on whether it's block form or single-line
-      def self.calculate_end_line(content, start_line, rule_id)
-        line = content.lines[start_line - 1]
-        is_block = line.strip.start_with?('#')
-
-        is_block ? find_enable(content.lines, start_line, rule_id) : start_line
-      end
-
-      # Parses YAML suppressions file.
-      # Returns Array[YamlSuppression]
+      # Parse YAML suppressions file
       def self.parse_yaml(path)
         return [] unless path && File.exist?(path)
 
@@ -90,13 +71,58 @@ module FiberAudit
         end
       end
 
-      # Helper method to find matching enable directive
-      def self.find_enable(lines, start_idx, rule_id)
-        (start_idx...lines.size).each do |i|
-          line = lines[i]
-          return i + 1 if line.match?(/fiber-audit:enable\s+#{Regexp.escape(rule_id)}/)
+      private
+
+      # Extract and validate reason from comment text
+      def self.extract_reason(text, path, line_number)
+        match = text.match(/--\s+(.+)$/)
+        if match.nil? || match[1].strip.empty?
+          raise FiberAudit::ConfigurationError,
+                "Inline suppression at #{path}:#{line_number} missing reason (use -- <reason>)"
         end
-        lines.size
+        match[1].strip
+      end
+
+      # Determine if comment is a block comment (only whitespace before #)
+      # vs a trailing comment (has code before #)
+      def self.block_comment?(comment, lines)
+        line = lines[comment.location.start_line - 1]
+        prefix = line[0, comment.location.start_column]
+        prefix.nil? || prefix.strip.empty?
+      end
+
+      # Build InlineSuppression objects, matching enables to disables
+      def self.build_suppressions(disables, enables, lines, path)
+        used_enable_lines = []
+
+        disables.map do |d|
+          end_line = if d[:block]
+                       # Find matching enable for this rule_id
+                       enable = enables.find do |e|
+                         e[:rule_id] == d[:rule_id] &&
+                           e[:line] > d[:line] &&
+                           !used_enable_lines.include?(e[:line])
+                       end
+                       if enable
+                         used_enable_lines << enable[:line]
+                         enable[:line]
+                       else
+                         # Unmatched block extends to EOF
+                         lines.size
+                       end
+                     else
+                       # Trailing comment: suppress only this line
+                       d[:line]
+                     end
+
+          InlineSuppression.new(
+            rule_id: d[:rule_id],
+            reason: d[:reason],
+            path: path,
+            start_line: d[:line],
+            end_line: end_line
+          )
+        end
       end
     end
   end

@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require_relative 'parser'
+
 module FiberAudit
   module Suppressions
     class Store

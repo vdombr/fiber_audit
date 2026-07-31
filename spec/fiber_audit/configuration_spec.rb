@@ -6,6 +6,26 @@ require 'tmpdir'
 require 'yaml'
 
 RSpec.describe FiberAudit::Configuration do
+  describe 'standalone loading' do
+    it 'can be required independently without the main loader' do
+      result = `ruby -Ilib -rfiber_audit/configuration -e "puts FiberAudit::Configuration.new.static_include.first" 2>&1`
+      expect($?.success?).to be(true)
+      expect(result.strip).to eq('app/**/*.rb')
+    end
+
+    it 'explicitly requires errors.rb' do
+      result = `ruby -Ilib -rfiber_audit/configuration -e "puts FiberAudit::ConfigurationError" 2>&1`
+      expect($?.success?).to be(true)
+      expect(result.strip).to eq('FiberAudit::ConfigurationError')
+    end
+
+    it 'explicitly requires findings/severity.rb' do
+      result = `ruby -Ilib -rfiber_audit/configuration -e "puts FiberAudit::Severity::LEVELS.first" 2>&1`
+      expect($?.success?).to be(true)
+      expect(result.strip).to eq('critical')
+    end
+  end
+
   describe 'defaults' do
     subject(:config) { described_class.new }
 
@@ -147,11 +167,240 @@ RSpec.describe FiberAudit::Configuration do
       expect(config.severity_override('FA9999')).to be_nil
     end
 
-    it 'raises ArgumentError for invalid severity' do
-      config_with_bad = described_class.new(rules_config: {
-                                              'FA1005' => { 'severity' => 'bogus' }
-                                            })
-      expect { config_with_bad.severity_override('FA1005') }.to raise_error(ArgumentError)
+    it 'raises ConfigurationError for invalid severity at construction time' do
+      expect do
+        described_class.new(rules_config: {
+                              'FA1005' => { 'severity' => 'bogus' }
+                            })
+      end.to raise_error(FiberAudit::ConfigurationError, /severity/)
+    end
+  end
+
+  describe 'strict validation' do
+    describe 'unknown keys' do
+      it 'raises ConfigurationError for unknown top-level key' do
+        yaml_content = {
+          'static' => { 'include' => ['app/**/*.rb'] },
+          'unknown_key' => 'value'
+        }
+
+        Dir.mktmpdir do |dir|
+          path = File.join(dir, '.fiber-audit.yml')
+          File.write(path, YAML.dump(yaml_content))
+
+          expect do
+            described_class.load(path)
+          end.to raise_error(FiberAudit::ConfigurationError, /unknown configuration key 'unknown_key' at top level/)
+        end
+      end
+
+      it 'raises ConfigurationError for unknown static key' do
+        yaml_content = {
+          'static' => { 'include' => ['app/**/*.rb'], 'bad_key' => 'value' }
+        }
+
+        Dir.mktmpdir do |dir|
+          path = File.join(dir, '.fiber-audit.yml')
+          File.write(path, YAML.dump(yaml_content))
+
+          expect do
+            described_class.load(path)
+          end.to raise_error(FiberAudit::ConfigurationError, /unknown configuration key 'bad_key' at static/)
+        end
+      end
+
+      it 'raises ConfigurationError for unknown report key' do
+        yaml_content = {
+          'report' => { 'formats' => ['text'], 'extra' => 'value' }
+        }
+
+        Dir.mktmpdir do |dir|
+          path = File.join(dir, '.fiber-audit.yml')
+          File.write(path, YAML.dump(yaml_content))
+
+          expect do
+            described_class.load(path)
+          end.to raise_error(FiberAudit::ConfigurationError, /unknown configuration key 'extra' at report/)
+        end
+      end
+
+      it 'raises ConfigurationError for unknown rule entry key' do
+        yaml_content = {
+          'rules' => { 'FA1001' => { 'enabled' => true, 'unknown' => 'value' } }
+        }
+
+        Dir.mktmpdir do |dir|
+          path = File.join(dir, '.fiber-audit.yml')
+          File.write(path, YAML.dump(yaml_content))
+
+          expect do
+            described_class.load(path)
+          end.to raise_error(FiberAudit::ConfigurationError, /unknown configuration key 'unknown' in rules\.FA1001/)
+        end
+      end
+    end
+
+    describe 'YAML structure validation' do
+      it 'raises ConfigurationError when top-level YAML is not a hash' do
+        Dir.mktmpdir do |dir|
+          path = File.join(dir, '.fiber-audit.yml')
+          File.write(path, YAML.dump('just a string'))
+
+          expect do
+            described_class.load(path)
+          end.to raise_error(FiberAudit::ConfigurationError, /configuration must be a YAML mapping/)
+        end
+      end
+
+      it 'raises ConfigurationError when static section is not a hash' do
+        yaml_content = { 'static' => 'not a hash' }
+
+        Dir.mktmpdir do |dir|
+          path = File.join(dir, '.fiber-audit.yml')
+          File.write(path, YAML.dump(yaml_content))
+
+          expect do
+            described_class.load(path)
+          end.to raise_error(FiberAudit::ConfigurationError, /static must be a mapping/)
+        end
+      end
+
+      it 'raises ConfigurationError when report section is not a hash' do
+        yaml_content = { 'report' => ['array', 'not', 'hash'] }
+
+        Dir.mktmpdir do |dir|
+          path = File.join(dir, '.fiber-audit.yml')
+          File.write(path, YAML.dump(yaml_content))
+
+          expect do
+            described_class.load(path)
+          end.to raise_error(FiberAudit::ConfigurationError, /report must be a mapping/)
+        end
+      end
+
+      it 'raises ConfigurationError when rules section is not a hash' do
+        yaml_content = { 'rules' => 'not a hash' }
+
+        Dir.mktmpdir do |dir|
+          path = File.join(dir, '.fiber-audit.yml')
+          File.write(path, YAML.dump(yaml_content))
+
+          expect do
+            described_class.load(path)
+          end.to raise_error(FiberAudit::ConfigurationError, /rules must be a mapping/)
+        end
+      end
+    end
+
+    describe 'report formats validation' do
+      it 'raises ConfigurationError when report_formats is empty' do
+        expect do
+          described_class.new(report_formats: [])
+        end.to raise_error(FiberAudit::ConfigurationError, /report\.formats must be a non-empty Array/)
+      end
+
+      it 'raises ConfigurationError when report_formats contains invalid format' do
+        expect do
+          described_class.new(report_formats: %w[text xml])
+        end.to raise_error(FiberAudit::ConfigurationError, /report\.formats must be a non-empty Array/)
+      end
+
+      it 'accepts valid formats (text and json)' do
+        expect do
+          described_class.new(report_formats: %w[text json])
+        end.not_to raise_error
+      end
+
+      it 'accepts single valid format' do
+        expect do
+          described_class.new(report_formats: ['json'])
+        end.not_to raise_error
+      end
+    end
+
+    describe 'min_severity validation' do
+      it 'raises ConfigurationError for invalid min_severity' do
+        expect do
+          described_class.new(min_severity: :bogus)
+        end.to raise_error(FiberAudit::ConfigurationError, /report\.min_severity is not a valid severity/)
+      end
+
+      it 'wraps Severity.coerce ArgumentError as ConfigurationError' do
+        expect do
+          described_class.new(min_severity: 'invalid')
+        end.to raise_error(FiberAudit::ConfigurationError)
+      end
+
+      it 'accepts valid severity levels' do
+        %i[critical high medium low info].each do |severity|
+          expect do
+            described_class.new(min_severity: severity)
+          end.not_to raise_error
+        end
+      end
+    end
+
+    describe 'suppressions_path validation' do
+      it 'raises ConfigurationError when suppressions_path is not nil or string' do
+        expect do
+          described_class.new(suppressions_path: 123)
+        end.to raise_error(FiberAudit::ConfigurationError, /static\.suppressions_path must be nil or a String/)
+      end
+
+      it 'accepts nil suppressions_path' do
+        expect do
+          described_class.new(suppressions_path: nil)
+        end.not_to raise_error
+      end
+
+      it 'accepts string suppressions_path' do
+        expect do
+          described_class.new(suppressions_path: '.suppressions.yml')
+        end.not_to raise_error
+      end
+    end
+
+    describe 'rule entry validation' do
+      it 'raises ConfigurationError when rule entry is not a hash' do
+        expect do
+          described_class.new(rules_config: { 'FA1001' => 'not a hash' })
+        end.to raise_error(FiberAudit::ConfigurationError, /rules\.FA1001 must be a Hash/)
+      end
+
+      it 'raises ConfigurationError when enabled is not a boolean' do
+        expect do
+          described_class.new(rules_config: { 'FA1001' => { 'enabled' => 'yes' } })
+        end.to raise_error(FiberAudit::ConfigurationError, /rules\.FA1001\.enabled must be a Boolean/)
+      end
+
+      it 'raises ConfigurationError when severity in rule entry is invalid' do
+        expect do
+          described_class.new(rules_config: { 'FA1001' => { 'severity' => 'bogus' } })
+        end.to raise_error(FiberAudit::ConfigurationError, /rules\.FA1001\.severity is not a valid severity/)
+      end
+
+      it 'accepts valid rule entries' do
+        expect do
+          described_class.new(rules_config: {
+            'FA1001' => { 'enabled' => true, 'severity' => 'high' },
+            'FA1002' => { 'enabled' => false }
+          })
+        end.not_to raise_error
+      end
+    end
+
+    describe 'raw Severity.coerce behavior' do
+      it 'does not modify raw Severity.coerce to raise ConfigurationError' do
+        expect do
+          FiberAudit::Severity.coerce(:bogus)
+        end.to raise_error(ArgumentError)
+      end
+
+      it 'still raises ArgumentError for invalid severity' do
+        expect do
+          FiberAudit::Severity.coerce('invalid')
+        end.to raise_error(ArgumentError, /unknown severity/)
+      end
     end
   end
 

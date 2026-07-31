@@ -2,11 +2,17 @@
 
 require 'yaml'
 require 'pathname'
+require_relative 'errors'
+require_relative 'findings/severity'
 
 module FiberAudit
-  class ConfigurationError < StandardError; end
-
   class Configuration
+    KNOWN_TOP_LEVEL_KEYS = %w[static rules report].freeze
+    KNOWN_STATIC_KEYS = %w[include exclude suppressions_path].freeze
+    KNOWN_REPORT_KEYS = %w[formats min_severity].freeze
+    KNOWN_RULE_KEYS = %w[enabled severity].freeze
+    VALID_FORMATS = %w[text json].freeze
+
     DEFAULT_STATIC_INCLUDE = %w[
       app/**/*.rb
       lib/**/*.rb
@@ -32,39 +38,22 @@ module FiberAudit
       min_severity: :low,
       suppressions_path: nil
     )
-      validate_config_types!(static_include, static_exclude, rules_config, report_formats, min_severity)
+      validate_types!(static_include, static_exclude, rules_config, report_formats, min_severity, suppressions_path)
 
       @static_include = static_include
       @static_exclude = static_exclude
       @rules_config = rules_config
       @report_formats = report_formats
-      @min_severity = Severity.coerce(min_severity)
+      @min_severity = coerce_severity(min_severity, 'report.min_severity')
       @suppressions_path = suppressions_path
     end
-
-    private
-
-    def validate_config_types!(include, exclude, rules, formats, _severity)
-      unless include.is_a?(Array) && include.all?(String)
-        raise ConfigurationError, 'static.include must be an Array of Strings'
-      end
-      unless exclude.is_a?(Array) && exclude.all?(String)
-        raise ConfigurationError, 'static.exclude must be an Array of Strings'
-      end
-      raise ConfigurationError, 'rules must be a Hash' unless rules.is_a?(Hash)
-      return if formats.is_a?(Array)
-
-      raise ConfigurationError, 'report.formats must be an Array'
-
-      # severity is validated by Severity.coerce
-    end
-
-    public
 
     def self.load(path = nil)
       return new unless path && File.exist?(path)
 
       yaml = YAML.safe_load_file(path) || {}
+      validate_yaml_structure!(yaml)
+
       static = yaml['static'] || {}
       rules = yaml['rules'] || {}
       report = yaml['report'] || {}
@@ -88,6 +77,101 @@ module FiberAudit
       entry = @rules_config[rule_id] || {}
       sev = entry['severity']
       sev ? Severity.coerce(sev.to_sym) : nil
+    end
+
+    private
+
+    def self.validate_yaml_structure!(yaml)
+      unless yaml.is_a?(Hash)
+        raise ConfigurationError, "configuration must be a YAML mapping, got #{yaml.class}"
+      end
+
+      check_unknown_keys(yaml, KNOWN_TOP_LEVEL_KEYS, 'top level')
+
+      if yaml.key?('static')
+        static = yaml['static']
+        unless static.is_a?(Hash)
+          raise ConfigurationError, "static must be a mapping, got #{static.class}"
+        end
+        check_unknown_keys(static, KNOWN_STATIC_KEYS, 'static')
+      end
+
+      if yaml.key?('report')
+        report = yaml['report']
+        unless report.is_a?(Hash)
+          raise ConfigurationError, "report must be a mapping, got #{report.class}"
+        end
+        check_unknown_keys(report, KNOWN_REPORT_KEYS, 'report')
+      end
+
+      if yaml.key?('rules')
+        rules = yaml['rules']
+        unless rules.is_a?(Hash)
+          raise ConfigurationError, "rules must be a mapping, got #{rules.class}"
+        end
+      end
+    end
+
+    def self.check_unknown_keys(hash, allowed, path)
+      unknown = hash.keys - allowed
+      unless unknown.empty?
+        sorted_allowed = allowed.sort.join(', ')
+        raise ConfigurationError,
+              "unknown configuration key '#{unknown.first}' at #{path} (valid keys: #{sorted_allowed})"
+      end
+    end
+
+    def validate_types!(include, exclude, rules, formats, severity, suppressions)
+      unless include.is_a?(Array) && include.all?(String)
+        raise ConfigurationError, 'static.include must be an Array of Strings'
+      end
+
+      unless exclude.is_a?(Array) && exclude.all?(String)
+        raise ConfigurationError, 'static.exclude must be an Array of Strings'
+      end
+
+      unless rules.is_a?(Hash)
+        raise ConfigurationError, 'rules must be a Hash'
+      end
+
+      validate_rules!(rules)
+
+      unless formats.is_a?(Array) && !formats.empty? && formats.all? { |f| VALID_FORMATS.include?(f) }
+        raise ConfigurationError, 'report.formats must be a non-empty Array containing only "text" and/or "json"'
+      end
+
+      unless suppressions.nil? || suppressions.is_a?(String)
+        raise ConfigurationError, 'static.suppressions_path must be nil or a String'
+      end
+    end
+
+    def validate_rules!(rules)
+      rules.each do |rule_id, entry|
+        unless entry.is_a?(Hash)
+          raise ConfigurationError, "rules.#{rule_id} must be a Hash, got #{entry.class}"
+        end
+
+        unknown = entry.keys - KNOWN_RULE_KEYS
+        unless unknown.empty?
+          sorted_allowed = KNOWN_RULE_KEYS.sort.join(', ')
+          raise ConfigurationError,
+                "unknown configuration key '#{unknown.first}' in rules.#{rule_id} (valid keys: #{sorted_allowed})"
+        end
+
+        if entry.key?('enabled') && ![true, false].include?(entry['enabled'])
+          raise ConfigurationError, "rules.#{rule_id}.enabled must be a Boolean"
+        end
+
+        if entry.key?('severity')
+          coerce_severity(entry['severity'], "rules.#{rule_id}.severity")
+        end
+      end
+    end
+
+    def coerce_severity(value, path)
+      Severity.coerce(value)
+    rescue ArgumentError
+      raise ConfigurationError, "#{path} is not a valid severity: #{value.inspect}"
     end
   end
 end
