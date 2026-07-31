@@ -2,6 +2,12 @@
 
 class SimpleClass
   def simple_method
-    puts 'hello'
+    'simple_result'
+  end
+end
+
+class AnotherSimpleClass
+  def another_method
+    'another_result'
   end
 end

@@ -2,6 +2,6 @@
 
 class ReopenedClass
   def method_two
-    2
+    'second'
   end
 end
