@@ -5,22 +5,24 @@ require 'fiber_audit/suppressions/parser'
 require 'fiber_audit/configuration' # for ConfigurationError
 require 'tmpdir'
 require 'yaml'
+require 'rbconfig'
 
 RSpec.describe FiberAudit::Suppressions::Parser do
   describe 'standalone loading' do
     it 'can be required independently without the main loader' do
-      cmd = 'ruby -Ilib -rfiber_audit/suppressions/parser' \
-            ' -e "puts FiberAudit::Suppressions::Parser' \
-            ".parse_inline('test.rb', '').inspect\""
-      output, _stderr, status = Open3.capture3(cmd)
+      output, _stderr, status = Open3.capture3(
+        RbConfig.ruby, '-Ilib', '-rfiber_audit/suppressions/parser',
+        '-e', "puts FiberAudit::Suppressions::Parser.parse_inline('test.rb', '').inspect"
+      )
       expect(status).to be_success
       expect(output.strip).to eq('[]')
     end
 
     it 'explicitly requires errors.rb' do
-      cmd = 'ruby -Ilib -rfiber_audit/suppressions/parser' \
-            ' -e "puts FiberAudit::ConfigurationError"'
-      output, _stderr, status = Open3.capture3(cmd)
+      output, _stderr, status = Open3.capture3(
+        RbConfig.ruby, '-Ilib', '-rfiber_audit/suppressions/parser',
+        '-e', 'puts FiberAudit::ConfigurationError'
+      )
       expect(status).to be_success
       expect(output.strip).to eq('FiberAudit::ConfigurationError')
     end
