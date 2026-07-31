@@ -5,9 +5,13 @@ AllCops:
   Exclude:
     - 'vendor/**/*'
     - 'tmp/**/*'
+    - 'node_modules/**/*'
     - 'spec/fixtures/**/*'
-    - 'Gemfile'
-    - '*.gemspec'
+    - 'Gemfile.lock'
+    - '**/*.md'
+    - '**/*.json'
+    - '**/*.gem'
+    - '.fiber-audit.example.yml'
 
 # RSpec DSL blocks (describe/context/it) legitimately span many lines;
 # scoped exclusion is preferable to a global disable.
