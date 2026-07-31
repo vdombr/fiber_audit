@@ -34,6 +34,14 @@ RSpec.describe FiberAudit::Static::SemanticIndex do
         expect(simple_class).not_to be_nil
         expect(simple_class.path).to end_with('simple_class.rb')
         expect(simple_class.line).to eq(3) # source line 3, one-based
+
+        # Verify method declaration line matches source
+        simple_method = declarations.find do |declaration|
+          declaration.name == 'SimpleClass#simple_method()' && declaration.kind == :method
+        end
+        expect(simple_method).not_to be_nil
+        expect(simple_method.path).to end_with('simple_class.rb')
+        expect(simple_method.line).to eq(4) # def simple_method is on line 4
       end
 
       it 'Case 2: indexes controller inheritance hierarchy' do
@@ -93,8 +101,14 @@ RSpec.describe FiberAudit::Static::SemanticIndex do
         expect(original).not_to be_nil
         expect(original.line).to eq(3) # source line 3
 
-        # Alias may or may not be indexed depending on Rubydex capabilities
-        # This is a known gap
+        # Verify references to Original include the alias assignment
+        original_refs = index.references_to('Original')
+        expect(original_refs).not_to be_empty
+        alias_ref = original_refs.find { |r| r.path.end_with?('constant_alias.rb') }
+        expect(alias_ref).not_to be_nil
+        expect(alias_ref).to be_a(described_class::Reference)
+        # In "Alias = Original", Original starts at column 8 (0-based)
+        expect(alias_ref.column).to eq(8)
       end
 
       it 'Case 8: indexes reopened class definitions with both sites' do
