@@ -11,14 +11,14 @@ module FiberAudit
     # * Lines are **one-based** (1, 2, 3, ...).
     # * Columns are **zero-based** (0, 1, 2, ...).
     #
-    # Rubydex locations already follow this convention (start_line is 1-based,
-    # start_column is 0-based). The +normalize_location+ helper centralizes
-    # extraction so callers never need to know about Rubydex's representation.
+    # Rubydex 0.2.9 reports start_line as **zero-based** and start_column as
+    # zero-based. The +normalize_location+ helper adds 1 to start_line so that
+    # all returned locations use FiberAudit's one-based line convention.
     class SemanticIndex
       # Data types returned by public seams.
-      Declaration = Data.define(:name, :kind, :path, :line, :column)
+      Declaration = Data.define(:name, :kind, :path, :line)
       Reference   = Data.define(:name, :path, :line, :column, :context)
-      Constant    = Data.define(:name, :path, :line, :column)
+      Constant    = Data.define(:name, :path, :line)
       RubydexGap  = Data.define(:method, :reason)
 
       attr_reader :root, :gaps
@@ -44,19 +44,20 @@ module FiberAudit
       end
 
       # Returns Array[Declaration] for classes/modules/methods in the workspace.
-      # Chooses the first *workspace* definition (not the first global definition)
-      # so that workspace code takes precedence over vendored gem definitions.
+      # Returns one Declaration per workspace definition site so that reopened
+      # classes expose both (or more) definition sites.
       def declarations
         return [] unless @graph
 
         @graph.declarations.select { |d| workspace_declaration?(d) }.filter_map do |decl|
-          loc = first_workspace_location(decl)
-          next unless loc
-
           kind = declaration_kind(decl)
-          path, line, column = normalize_location(loc)
-          Declaration.new(name: decl.name, kind: kind, path: path, line: line, column: column)
-        end
+          workspace_definition_locations(decl).filter_map do |loc|
+            path, line = normalize_location(loc)
+            next unless path
+
+            Declaration.new(name: decl.name, kind: kind, path: path, line: line)
+          end
+        end.flatten
       rescue StandardError
         []
       end
@@ -72,8 +73,8 @@ module FiberAudit
         loc = first_workspace_location(result)
         return nil unless loc
 
-        path, line, column = normalize_location(loc)
-        Constant.new(name: result.name, path: path, line: line, column: column)
+        path, line = normalize_location(loc)
+        Constant.new(name: result.name, path: path, line: line)
       rescue StandardError
         nil
       end
@@ -126,40 +127,8 @@ module FiberAudit
           loc = ref.location
           next unless workspace_location?(loc)
 
-          path, line, column = normalize_location(loc)
+          path, line, column = normalize_location_full(loc)
           Reference.new(name: name, path: path, line: line, column: column, context: nil)
-        rescue StandardError
-          nil
-        end
-      rescue StandardError
-        []
-      end
-
-      # Number of definitions for a given declaration name (useful for reopened classes).
-      def definition_count(name)
-        return 0 unless @graph
-
-        decl = find_declaration(name)
-        return 0 unless decl&.respond_to?(:definitions)
-
-        decl.definitions.count { |d| workspace_location?(d.location) }
-      rescue StandardError
-        0
-      end
-
-      # Definition sites for a given declaration name.
-      # Returns Array of {path:, line:, column:} hashes for workspace definitions.
-      def definition_sites(name)
-        return [] unless @graph
-
-        decl = find_declaration(name)
-        return [] unless decl&.respond_to?(:definitions)
-
-        decl.definitions.filter_map do |d|
-          next unless workspace_location?(d.location)
-
-          path, line, column = normalize_location(d.location)
-          { path: path, line: line, column: column }
         rescue StandardError
           nil
         end
@@ -207,10 +176,24 @@ module FiberAudit
         false
       end
 
-      # ---- Definition selection: first workspace definition ----
+      # ---- Definition site enumeration ----
+
+      # Returns all workspace-owned locations from a declaration's definitions.
+      # This ensures reopened classes expose all definition sites.
+      def workspace_definition_locations(decl)
+        return [] unless decl.respond_to?(:definitions)
+
+        decl.definitions.filter_map do |d|
+          d.location if workspace_location?(d.location)
+        rescue StandardError
+          nil
+        end
+      rescue StandardError
+        []
+      end
 
       # Returns the first workspace-owned location from a declaration's definitions.
-      # This ensures workspace code takes precedence over global/vendored definitions.
+      # Used for constant resolution where only the primary site is needed.
       def first_workspace_location(decl)
         return nil unless decl.respond_to?(:definitions)
 
@@ -236,11 +219,22 @@ module FiberAudit
         nil
       end
 
-      # Normalize a rubydex location to [path, line, column].
-      # Rubydex uses 1-based lines and 0-based columns, matching FiberAudit conventions.
+      # Normalize a rubydex location to [path, line] for Declaration/Constant.
+      # Rubydex 0.2.9 reports start_line as zero-based; we add 1 for the
+      # FiberAudit one-based line convention.
       def normalize_location(loc)
         path = location_file_path(loc)
-        [path, loc.start_line, loc.start_column]
+        [path, loc.start_line + 1]
+      rescue StandardError
+        [nil, nil]
+      end
+
+      # Normalize a rubydex location to [path, line, column] for Reference.
+      # Rubydex 0.2.9 reports start_line as zero-based; we add 1 for the
+      # FiberAudit one-based line convention. Columns remain zero-based.
+      def normalize_location_full(loc)
+        path = location_file_path(loc)
+        [path, loc.start_line + 1, loc.start_column]
       rescue StandardError
         [nil, nil, nil]
       end
