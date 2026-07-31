@@ -1,0 +1,23 @@
+# FiberAudit configuration
+static:
+  include:
+    - app/**/*.rb
+    - lib/**/*.rb
+    - config/**/*.rb
+  exclude:
+    - vendor/**/*
+    - tmp/**/*
+    - db/schema.rb
+  # suppressions_path: .fiber-audit-suppressions.yml
+
+rules:
+  FA1007:
+    enabled: false
+  FA1003:
+    severity: low
+
+report:
+  formats:
+    - text
+    - json
+  min_severity: low

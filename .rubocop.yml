@@ -1,0 +1,49 @@
+AllCops:
+  NewCops: enable
+  TargetRubyVersion: 3.2
+  SuggestExtensions: false
+  Exclude:
+    - 'vendor/**/*'
+    - 'tmp/**/*'
+    - 'spec/fixtures/**/*'
+    - 'Gemfile'
+    - '*.gemspec'
+
+# Metrics are typically disabled in specs
+Metrics/BlockLength:
+  Exclude:
+    - 'spec/**/*'
+
+Metrics/MethodLength:
+  Max: 40
+  Exclude:
+    - 'spec/**/*'
+
+Metrics/ClassLength:
+  Max: 150
+
+# Documentation is not required for 0.1.0
+Style/Documentation:
+  Enabled: false
+
+# Allow parameter lists up to 15 for data classes
+Metrics/ParameterLists:
+  Max: 15
+
+# ABC size and complexity can be higher for this codebase
+Metrics/AbcSize:
+  Max: 30
+
+Metrics/CyclomaticComplexity:
+  Max: 15
+
+Metrics/PerceivedComplexity:
+  Max: 15
+
+# Line length
+Layout/LineLength:
+  Max: 125
+
+# Data.define can override :method
+Lint/DataDefineOverride:
+  Enabled: false
