@@ -98,6 +98,12 @@ RSpec.describe FiberAudit::Static::CallSiteExtractor do
 
         capture3_call = result.call_sites.find { |cs| cs.method_name == :capture3 }
         expect(capture3_call.enclosing_symbol).to eq('ClassMethodsExample.class_method')
+
+        waitall_call = result.call_sites.find { |cs| cs.method_name == :waitall }
+        expect(waitall_call.enclosing_symbol).to eq('ClassMethodsExample.singleton_block_method')
+
+        select_call = result.call_sites.find { |cs| cs.method_name == :select }
+        expect(select_call.enclosing_symbol).to eq('ClassMethodsExample.explicit_receiver_method')
       end
 
       it 'tracks method_kind correctly' do
@@ -143,9 +149,11 @@ RSpec.describe FiberAudit::Static::CallSiteExtractor do
         expect(get_call.resolution).to eq('Net::HTTP.get')
       end
 
-      it 'tracks nested class/module nesting' do
+      it 'tracks fully qualified lexical nesting and enclosing symbols' do
         get_call = result.call_sites.find { |cs| cs.method_name == :get }
-        expect(get_call.nesting).to eq(%w[OuterModule InnerClass])
+
+        expect(get_call.nesting).to eq(%w[OuterModule OuterModule::InnerClass])
+        expect(get_call.enclosing_symbol).to eq('OuterModule::InnerClass#nested_method')
       end
     end
 
@@ -230,9 +238,9 @@ RSpec.describe FiberAudit::Static::CallSiteExtractor do
       let(:file) { File.join(fixtures_path, 'reassignment.rb') }
       let(:result) { described_class.new(files: [file]).call }
 
-      it 'extracts exactly 3 get calls' do
+      it 'extracts all four get calls' do
         get_calls = result.call_sites.select { |cs| cs.method_name == :get }
-        expect(get_calls.size).to eq(3)
+        expect(get_calls.size).to eq(4)
       end
 
       it 'first get after Redis.new has high confidence' do
@@ -264,6 +272,15 @@ RSpec.describe FiberAudit::Static::CallSiteExtractor do
         expect(third_get.confidence).to eq(:low)
         expect(third_get.receiver_source).to eq('client')
         expect(third_get.arguments).to eq(["'key3'"])
+      end
+
+      it 'does not leak an assignment into a sibling branch' do
+        get_calls = result.call_sites.select { |cs| cs.method_name == :get }
+        sibling_get = get_calls[3]
+
+        expect(sibling_get.receiver_constant).to be_nil
+        expect(sibling_get.receiver_source).to eq('sibling_client')
+        expect(sibling_get.confidence).to eq(:low)
       end
     end
 

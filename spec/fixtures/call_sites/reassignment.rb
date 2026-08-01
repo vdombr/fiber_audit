@@ -21,6 +21,14 @@ class ReassignmentExample
     client.get('key3')
   end
 
+  def sibling_branch_isolation
+    if condition
+      sibling_client = Redis.new
+    else
+      sibling_client.get('key')
+    end
+  end
+
   def condition
     true
   end

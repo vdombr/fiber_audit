@@ -158,34 +158,29 @@ module FiberAudit
         # --- Class/Module/SingletonClass visitors ---
 
         def visit_class(node)
-          # Extract fully qualified constant path components for nesting
-          names = extract_nesting_names(node.constant_path)
-          names.each { |n| @nesting_stack.push(n) }
-
-          @scope_stack.push([names.last, nil, :instance])
-          saved_scope = @assignment_scope
-          @assignment_scope = {}
-
-          visit_children(node)
-
-          @assignment_scope = saved_scope
-          @scope_stack.pop
-          names.size.times { @nesting_stack.pop }
+          visit_constant_scope(node.constant_path, :instance) do
+            visit_children(node)
+          end
         end
 
         def visit_module(node)
-          names = extract_nesting_names(node.constant_path)
-          names.each { |n| @nesting_stack.push(n) }
+          visit_constant_scope(node.constant_path, :module) do
+            visit_children(node)
+          end
+        end
 
-          @scope_stack.push([names.last, nil, :module])
+        def visit_constant_scope(constant_path, kind)
+          qualified_name = qualified_declaration_name(constant_path)
+          @nesting_stack.push(qualified_name) if qualified_name
+          @scope_stack.push([qualified_name, nil, kind])
           saved_scope = @assignment_scope
           @assignment_scope = {}
 
-          visit_children(node)
-
+          yield
+        ensure
           @assignment_scope = saved_scope
           @scope_stack.pop
-          names.size.times { @nesting_stack.pop }
+          @nesting_stack.pop if qualified_name
         end
 
         def visit_singleton_class(node)
@@ -200,7 +195,7 @@ module FiberAudit
           method_name = node.name.to_s
           method_kind = determine_method_kind(node)
 
-          enclosing = current_enclosing_constant
+          enclosing = explicit_method_receiver(node) || current_enclosing_constant
           @scope_stack.push([enclosing, method_name, method_kind])
 
           saved_scope = @assignment_scope
@@ -216,17 +211,16 @@ module FiberAudit
         # Assignments in branches cannot leak to outer scope conservatively.
 
         def visit_branching(node)
-          # Snapshot current assignments before entering branches
+          # Each direct branch starts from the same pre-branch bindings. This
+          # prevents assignments in one branch from influencing calls in a
+          # sibling branch, and no branch-local assignment leaks afterward.
           pre_scope = @assignment_scope.dup
-
-          # Visit all child nodes to collect call sites in branches
-          # but restore assignment scope afterward
-          visit_children(node)
-
-          # Restore pre-branch scope: any assignments made inside branches
-          # are discarded. Variables that existed before and were not
-          # reassigned remain; new variables from branches don't leak.
-          @assignment_scope = pre_scope
+          node.compact_child_nodes.each do |child|
+            @assignment_scope = pre_scope.dup
+            visit(child)
+          end
+        ensure
+          @assignment_scope = pre_scope if pre_scope
         end
 
         # --- Call node visitor ---
@@ -442,27 +436,15 @@ module FiberAudit
           parts.join('::')
         end
 
-        # Extract nesting names from a constant path node.
-        # For `class Outer::Inner`, returns ['Outer', 'Inner'].
-        # For `class Foo`, returns ['Foo'].
-        def extract_nesting_names(node)
-          return [] unless node
+        # Return the fully qualified lexical declaration name. Ruby treats
+        # `class Outer::Inner` as one nesting entry, while nested class/module
+        # bodies add their fully qualified name to the existing lexical stack.
+        def qualified_declaration_name(node)
+          name = extract_constant_from_node(node)
+          return nil unless name
+          return name if name.include?('::') || @nesting_stack.empty?
 
-          case node
-          when Prism::ConstantReadNode
-            [node.name.to_s]
-          when Prism::ConstantPathNode
-            parts = []
-            current = node
-            while current.is_a?(Prism::ConstantPathNode)
-              parts.unshift(current.name.to_s)
-              current = current.parent
-            end
-            parts.unshift(current.name.to_s) if current.is_a?(Prism::ConstantReadNode)
-            parts
-          else
-            []
-          end
+          "#{@nesting_stack.last}::#{name}"
         end
 
         # --- Resolution and confidence ---
@@ -511,9 +493,15 @@ module FiberAudit
         # --- Method kind determination ---
 
         def determine_method_kind(node)
-          return :class if node.receiver.is_a?(Prism::SelfNode) || @in_singleton_class
+          return :class if node.receiver || @in_singleton_class
 
           :instance
+        end
+
+        def explicit_method_receiver(node)
+          return unless node.receiver && !node.receiver.is_a?(Prism::SelfNode)
+
+          extract_constant_from_node(node.receiver)
         end
 
         def current_enclosing_constant
