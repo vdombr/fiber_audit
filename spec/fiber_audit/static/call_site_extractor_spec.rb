@@ -153,16 +153,43 @@ RSpec.describe FiberAudit::Static::CallSiteExtractor do
       let(:file) { File.join(fixtures_path, 'constructor_chain.rb') }
       let(:result) { described_class.new(files: [file]).call }
 
-      it 'propagates Thread from Thread.new' do
-        join_call = result.call_sites.find { |cs| cs.method_name == :join }
+      it 'propagates Thread from assignment-based Thread.new' do
+        join_calls = result.call_sites.select { |cs| cs.method_name == :join }
+        expect(join_calls).not_to be_empty
+
+        join_call = join_calls.first
         expect(join_call.receiver_constant).to eq('Thread')
         expect(join_call.confidence).to eq(:high)
       end
 
-      it 'propagates Mutex from Mutex.new' do
-        synchronize_call = result.call_sites.find { |cs| cs.method_name == :synchronize }
-        expect(synchronize_call.receiver_constant).to eq('Mutex')
-        expect(synchronize_call.confidence).to eq(:high)
+      it 'propagates Mutex from assignment-based Mutex.new' do
+        sync_calls = result.call_sites.select { |cs| cs.method_name == :synchronize }
+        expect(sync_calls).not_to be_empty
+
+        sync_call = sync_calls.first
+        expect(sync_call.receiver_constant).to eq('Mutex')
+        expect(sync_call.confidence).to eq(:high)
+      end
+
+      it 'infers Thread from direct Thread.new.join chain' do
+        join_calls = result.call_sites.select { |cs| cs.method_name == :join }
+        # Should have at least 2 join calls (assignment-based + direct)
+        expect(join_calls.size).to be >= 2
+
+        direct_join = join_calls.find { |cs| cs.receiver_source == 'Thread.new' }
+        expect(direct_join).not_to be_nil
+        expect(direct_join.receiver_constant).to eq('Thread')
+        expect(direct_join.confidence).to eq(:high)
+      end
+
+      it 'infers Mutex from direct Mutex.new.synchronize chain' do
+        sync_calls = result.call_sites.select { |cs| cs.method_name == :synchronize }
+        expect(sync_calls.size).to be >= 2
+
+        direct_sync = sync_calls.find { |cs| cs.receiver_source == 'Mutex.new' }
+        expect(direct_sync).not_to be_nil
+        expect(direct_sync.receiver_constant).to eq('Mutex')
+        expect(direct_sync.confidence).to eq(:high)
       end
     end
 
@@ -203,20 +230,40 @@ RSpec.describe FiberAudit::Static::CallSiteExtractor do
       let(:file) { File.join(fixtures_path, 'reassignment.rb') }
       let(:result) { described_class.new(files: [file]).call }
 
-      it 'invalidates tracking after reassignment' do
-        # First get has Redis, second get should be invalidated
+      it 'extracts exactly 3 get calls' do
         get_calls = result.call_sites.select { |cs| cs.method_name == :get }
-        expect(get_calls.size).to eq(2)
+        expect(get_calls.size).to eq(3)
+      end
 
-        first_get = get_calls.first
-        second_get = get_calls.last
+      it 'first get after Redis.new has high confidence' do
+        get_calls = result.call_sites.select { |cs| cs.method_name == :get }
+        first_get = get_calls[0]
 
         expect(first_get.receiver_constant).to eq('Redis')
         expect(first_get.confidence).to eq(:high)
+        expect(first_get.arguments).to eq(["'key1'"])
+      end
 
-        # After reassignment, tracking is invalidated
+      it 'second get after builder reassignment has low confidence' do
+        get_calls = result.call_sites.select { |cs| cs.method_name == :get }
+        second_get = get_calls[1]
+
+        # After reassignment to build_client (a builder), tracking is invalidated
         expect(second_get.receiver_constant).to be_nil
         expect(second_get.confidence).to eq(:low)
+        expect(second_get.receiver_source).to eq('client')
+        expect(second_get.arguments).to eq(["'key2'"])
+      end
+
+      it 'third get after conditional assignment has low confidence' do
+        get_calls = result.call_sites.select { |cs| cs.method_name == :get }
+        third_get = get_calls[2]
+
+        # After if/else with branch-local assignments, tracking is invalidated conservatively
+        expect(third_get.receiver_constant).to be_nil
+        expect(third_get.confidence).to eq(:low)
+        expect(third_get.receiver_source).to eq('client')
+        expect(third_get.arguments).to eq(["'key3'"])
       end
     end
 

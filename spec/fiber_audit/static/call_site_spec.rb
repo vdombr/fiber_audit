@@ -41,6 +41,90 @@ RSpec.describe FiberAudit::Static::CallSite do
       expect(cs.method_name).to eq(:puts)
       expect(cs.method_name).to be_a(Symbol)
     end
+
+    it 'preserves nil method_name' do
+      cs = described_class.new(
+        path: 'test.rb', line: 1, column: 0,
+        receiver_source: nil, receiver_constant: nil, method_name: nil,
+        arguments: [], enclosing_symbol: nil, nesting: [],
+        execution_context: nil, resolution: nil, confidence: :unknown
+      )
+
+      expect(cs.method_name).to be_nil
+    end
+
+    it 'validates confidence via Confidence.coerce' do
+      expect do
+        described_class.new(
+          path: 'test.rb', line: 1, column: 0,
+          receiver_source: nil, receiver_constant: nil, method_name: :test,
+          arguments: [], enclosing_symbol: nil, nesting: [],
+          execution_context: nil, resolution: nil, confidence: :bogus
+        )
+      end.to raise_error(ArgumentError, /unknown confidence/i)
+    end
+
+    it 'accepts all valid confidence levels' do
+      FiberAudit::Confidence::LEVELS.each do |level|
+        cs = described_class.new(
+          path: 'test.rb', line: 1, column: 0,
+          receiver_source: nil, receiver_constant: nil, method_name: :test,
+          arguments: [], enclosing_symbol: nil, nesting: [],
+          execution_context: nil, resolution: nil, confidence: level
+        )
+        expect(cs.confidence).to eq(level)
+      end
+    end
+
+    it 'freezes arguments to prevent caller mutation' do
+      args = ['key']
+      cs = described_class.new(
+        path: 'test.rb', line: 1, column: 0,
+        receiver_source: 'Redis', receiver_constant: 'Redis', method_name: :get,
+        arguments: args, enclosing_symbol: nil, nesting: [],
+        execution_context: nil, resolution: 'Redis.get', confidence: :high
+      )
+
+      expect(cs.arguments).to be_frozen
+      expect { args << 'mutated' }.not_to change { cs.arguments }
+    end
+
+    it 'freezes nesting to prevent caller mutation' do
+      nesting = ['Foo']
+      cs = described_class.new(
+        path: 'test.rb', line: 1, column: 0,
+        receiver_source: nil, receiver_constant: nil, method_name: :test,
+        arguments: [], enclosing_symbol: nil, nesting: nesting,
+        execution_context: nil, resolution: nil, confidence: :unknown
+      )
+
+      expect(cs.nesting).to be_frozen
+      expect { nesting << 'Bar' }.not_to change { cs.nesting }
+    end
+
+    it 'duplicates arguments so caller cannot mutate via original reference' do
+      args = ['key']
+      cs = described_class.new(
+        path: 'test.rb', line: 1, column: 0,
+        receiver_source: 'Redis', receiver_constant: 'Redis', method_name: :get,
+        arguments: args, enclosing_symbol: nil, nesting: [],
+        execution_context: nil, resolution: 'Redis.get', confidence: :high
+      )
+
+      args << 'mutated'
+      expect(cs.arguments).to eq(['key'])
+    end
+
+    it 'rejects invalid method_name types' do
+      expect do
+        described_class.new(
+          path: 'test.rb', line: 1, column: 0,
+          receiver_source: nil, receiver_constant: nil, method_name: 123,
+          arguments: [], enclosing_symbol: nil, nesting: [],
+          execution_context: nil, resolution: nil, confidence: :unknown
+        )
+      end.to raise_error(ArgumentError, /method_name must be String, Symbol, or nil/)
+    end
   end
 
   describe '#location' do
