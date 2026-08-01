@@ -1,0 +1,373 @@
+# frozen_string_literal: true
+
+require 'spec_helper'
+require 'fiber_audit/static/call_site_extractor'
+
+RSpec.describe FiberAudit::Static::CallSiteExtractor do
+  let(:fixtures_path) { File.expand_path('../../fixtures/call_sites', __dir__) }
+
+  describe 'Data structures' do
+    it 'defines ParseError with path, message, line' do
+      expect(described_class::ParseError.members).to eq(%i[path message line])
+    end
+
+    it 'defines Result with call_sites, parse_errors' do
+      expect(described_class::Result.members).to eq(%i[call_sites parse_errors])
+    end
+  end
+
+  describe '#initialize' do
+    it 'accepts files and optional semantic_index' do
+      extractor = described_class.new(files: ['test.rb'])
+      expect(extractor).to be_a(described_class)
+    end
+
+    it 'wraps single file in array' do
+      extractor = described_class.new(files: 'test.rb')
+      result = extractor.call
+      expect(result).to be_a(described_class::Result)
+    end
+  end
+
+  describe '#call' do
+    it 'returns Result with call_sites and parse_errors' do
+      extractor = described_class.new(files: [])
+      result = extractor.call
+
+      expect(result).to be_a(described_class::Result)
+      expect(result.call_sites).to be_an(Array)
+      expect(result.parse_errors).to be_an(Array)
+    end
+
+    context 'with simple_class fixture' do
+      let(:file) { File.join(fixtures_path, 'simple_class.rb') }
+      let(:result) { described_class.new(files: [file]).call }
+
+      it 'extracts call sites with correct method names as Symbols' do
+        methods = result.call_sites.map(&:method_name)
+        expect(methods).to include(:puts, :capture3)
+      end
+
+      it 'tracks enclosing_symbol correctly' do
+        puts_call = result.call_sites.find { |cs| cs.method_name == :puts }
+        expect(puts_call.enclosing_symbol).to eq('SimpleClass#simple_method')
+
+        capture3_call = result.call_sites.find { |cs| cs.method_name == :capture3 }
+        expect(capture3_call.enclosing_symbol).to eq('SimpleClass#simple_method')
+      end
+
+      it 'resolves well-known constants with high confidence' do
+        capture3_call = result.call_sites.find { |cs| cs.method_name == :capture3 }
+        expect(capture3_call.receiver_constant).to eq('Open3')
+        expect(capture3_call.confidence).to eq(:high)
+        expect(capture3_call.resolution).to eq('Open3.capture3')
+      end
+
+      it 'marks bare calls as unknown confidence' do
+        puts_call = result.call_sites.find { |cs| cs.method_name == :puts }
+        expect(puts_call.receiver_source).to be_nil
+        expect(puts_call.receiver_constant).to be_nil
+        expect(puts_call.confidence).to eq(:unknown)
+        expect(puts_call.resolution).to be_nil
+      end
+
+      it 'extracts exact source for arguments' do
+        capture3_call = result.call_sites.find { |cs| cs.method_name == :capture3 }
+        expect(capture3_call.arguments).to eq(["'ls'"])
+      end
+
+      it 'tracks nesting' do
+        capture3_call = result.call_sites.find { |cs| cs.method_name == :capture3 }
+        expect(capture3_call.nesting).to eq(['SimpleClass'])
+      end
+
+      it 'preserves path exactly as supplied' do
+        result.call_sites.each do |cs|
+          expect(cs.path).to eq(file)
+        end
+      end
+    end
+
+    context 'with class_methods fixture' do
+      let(:file) { File.join(fixtures_path, 'class_methods.rb') }
+      let(:result) { described_class.new(files: [file]).call }
+
+      it 'distinguishes instance and class method enclosing symbols' do
+        thread_call = result.call_sites.find { |cs| cs.method_name == :new }
+        expect(thread_call.enclosing_symbol).to eq('ClassMethodsExample#instance_method')
+
+        capture3_call = result.call_sites.find { |cs| cs.method_name == :capture3 }
+        expect(capture3_call.enclosing_symbol).to eq('ClassMethodsExample.class_method')
+      end
+
+      it 'tracks method_kind correctly' do
+        thread_call = result.call_sites.find { |cs| cs.method_name == :new }
+        expect(thread_call.method_name).to eq(:new)
+
+        capture3_call = result.call_sites.find { |cs| cs.method_name == :capture3 }
+        expect(capture3_call.method_name).to eq(:capture3)
+      end
+    end
+
+    context 'with assignment_propagation fixture' do
+      let(:file) { File.join(fixtures_path, 'assignment_propagation.rb') }
+      let(:result) { described_class.new(files: [file]).call }
+
+      it 'propagates constant from Redis.new assignment with high confidence' do
+        get_call = result.call_sites.find { |cs| cs.method_name == :get }
+        expect(get_call.receiver_constant).to eq('Redis')
+        expect(get_call.confidence).to eq(:high)
+      end
+
+      it 'propagates constant through multiple calls in same scope' do
+        set_call = result.call_sites.find { |cs| cs.method_name == :set }
+        expect(set_call.receiver_constant).to eq('Redis')
+        expect(set_call.confidence).to eq(:high)
+      end
+
+      it 'marks builder call results as low confidence' do
+        execute_call = result.call_sites.find { |cs| cs.method_name == :execute }
+        expect(execute_call.receiver_constant).to be_nil
+        expect(execute_call.confidence).to eq(:low)
+      end
+    end
+
+    context 'with nested_constants fixture' do
+      let(:file) { File.join(fixtures_path, 'nested_constants.rb') }
+      let(:result) { described_class.new(files: [file]).call }
+
+      it 'resolves nested constants like Net::HTTP' do
+        get_call = result.call_sites.find { |cs| cs.method_name == :get }
+        expect(get_call.receiver_constant).to eq('Net::HTTP')
+        expect(get_call.confidence).to eq(:high)
+        expect(get_call.resolution).to eq('Net::HTTP.get')
+      end
+
+      it 'tracks nested class/module nesting' do
+        get_call = result.call_sites.find { |cs| cs.method_name == :get }
+        expect(get_call.nesting).to eq(%w[OuterModule InnerClass])
+      end
+    end
+
+    context 'with constructor_chain fixture' do
+      let(:file) { File.join(fixtures_path, 'constructor_chain.rb') }
+      let(:result) { described_class.new(files: [file]).call }
+
+      it 'propagates Thread from Thread.new' do
+        join_call = result.call_sites.find { |cs| cs.method_name == :join }
+        expect(join_call.receiver_constant).to eq('Thread')
+        expect(join_call.confidence).to eq(:high)
+      end
+
+      it 'propagates Mutex from Mutex.new' do
+        synchronize_call = result.call_sites.find { |cs| cs.method_name == :synchronize }
+        expect(synchronize_call.receiver_constant).to eq('Mutex')
+        expect(synchronize_call.confidence).to eq(:high)
+      end
+    end
+
+    context 'with malformed fixture' do
+      let(:file) { File.join(fixtures_path, 'malformed.rb') }
+      let(:result) { described_class.new(files: [file]).call }
+
+      it 'collects parse errors and skips traversal' do
+        expect(result.parse_errors).not_to be_empty
+        expect(result.parse_errors.first).to be_a(described_class::ParseError)
+        expect(result.parse_errors.first.path).to eq(file)
+        expect(result.call_sites).to be_empty
+      end
+
+      it 'includes error message and line' do
+        error = result.parse_errors.first
+        expect(error.message).to be_a(String)
+        expect(error.line).to be_a(Integer).or be_nil
+      end
+    end
+
+    context 'with scope_isolation fixture' do
+      let(:file) { File.join(fixtures_path, 'scope_isolation.rb') }
+      let(:result) { described_class.new(files: [file]).call }
+
+      it 'does not leak assignments across methods' do
+        puts_calls = result.call_sites.select { |cs| cs.method_name == :puts }
+        expect(puts_calls.size).to eq(1)
+
+        # The puts in method_two should not see client from method_one
+        puts_call = puts_calls.first
+        expect(puts_call.receiver_constant).to be_nil
+        expect(puts_call.confidence).to eq(:unknown)
+      end
+    end
+
+    context 'with reassignment fixture' do
+      let(:file) { File.join(fixtures_path, 'reassignment.rb') }
+      let(:result) { described_class.new(files: [file]).call }
+
+      it 'invalidates tracking after reassignment' do
+        # First get has Redis, second get should be invalidated
+        get_calls = result.call_sites.select { |cs| cs.method_name == :get }
+        expect(get_calls.size).to eq(2)
+
+        first_get = get_calls.first
+        second_get = get_calls.last
+
+        expect(first_get.receiver_constant).to eq('Redis')
+        expect(first_get.confidence).to eq(:high)
+
+        # After reassignment, tracking is invalidated
+        expect(second_get.receiver_constant).to be_nil
+        expect(second_get.confidence).to eq(:low)
+      end
+    end
+
+    context 'with multiple files' do
+      let(:files) do
+        [
+          File.join(fixtures_path, 'simple_class.rb'),
+          File.join(fixtures_path, 'class_methods.rb')
+        ]
+      end
+      let(:result) { described_class.new(files: files).call }
+
+      it 'processes all files' do
+        paths = result.call_sites.map(&:path).uniq
+        expect(paths).to match_array(files)
+      end
+
+      it 'maintains deterministic ordering' do
+        # Files should be processed in the order provided
+        first_file_calls = result.call_sites.select { |cs| cs.path == files[0] }
+        expect(first_file_calls).not_to be_empty
+      end
+    end
+
+    context 'with non-existent file' do
+      let(:result) { described_class.new(files: ['nonexistent.rb']).call }
+
+      it 'collects error and continues' do
+        expect(result.parse_errors).not_to be_empty
+        expect(result.parse_errors.first.message).to include('No such file')
+      end
+    end
+
+    context 'with semantic index' do
+      let(:file) { File.join(fixtures_path, 'simple_class.rb') }
+      let(:semantic_index) do
+        instance_double('FiberAudit::Static::SemanticIndex')
+      end
+
+      before do
+        allow(semantic_index).to receive(:resolve_constant).and_return(nil)
+      end
+
+      it 'tries semantic index before well-known table' do
+        extractor = described_class.new(files: [file], semantic_index: semantic_index)
+        result = extractor.call
+
+        # Should still resolve Open3 from well-known table
+        capture3_call = result.call_sites.find { |cs| cs.method_name == :capture3 }
+        expect(capture3_call.receiver_constant).to eq('Open3')
+      end
+    end
+
+    context 'single read/parse guarantee' do
+      it 'reads and parses each file only once' do
+        file = File.join(fixtures_path, 'simple_class.rb')
+
+        # Mock File.read to count calls
+        read_count = 0
+        allow(File).to receive(:read).and_wrap_original do |original, *args|
+          read_count += 1 if args.first == file
+          original.call(*args)
+        end
+
+        extractor = described_class.new(files: [file])
+        extractor.call
+
+        expect(read_count).to eq(1)
+      end
+    end
+  end
+
+  describe 'well-known constants' do
+    it 'includes common blocking operations' do
+      well_known = described_class::WELL_KNOWN_CONSTANTS
+
+      expect(well_known).to include('Open3')
+      expect(well_known).to include('Thread')
+      expect(well_known).to include('Mutex')
+      expect(well_known).to include('Net::HTTP')
+      expect(well_known).to include('Redis')
+      expect(well_known).to include('IO')
+      expect(well_known).to include('Process')
+      expect(well_known).to include('Socket')
+    end
+  end
+
+  describe 'confidence levels' do
+    it 'uses :high for resolved constants' do
+      file = File.join(fixtures_path, 'simple_class.rb')
+      result = described_class.new(files: [file]).call
+
+      open3_call = result.call_sites.find { |cs| cs.method_name == :capture3 }
+      expect(open3_call.confidence).to eq(:high)
+    end
+
+    it 'uses :low for textual receivers' do
+      file = File.join(fixtures_path, 'assignment_propagation.rb')
+      result = described_class.new(files: [file]).call
+
+      execute_call = result.call_sites.find { |cs| cs.method_name == :execute }
+      expect(execute_call.confidence).to eq(:low)
+    end
+
+    it 'uses :unknown for bare implicit calls' do
+      file = File.join(fixtures_path, 'simple_class.rb')
+      result = described_class.new(files: [file]).call
+
+      puts_call = result.call_sites.find { |cs| cs.method_name == :puts }
+      expect(puts_call.confidence).to eq(:unknown)
+    end
+  end
+
+  describe 'resolution strings' do
+    it 'formats as receiver_constant.method_name when resolved' do
+      file = File.join(fixtures_path, 'nested_constants.rb')
+      result = described_class.new(files: [file]).call
+
+      get_call = result.call_sites.find { |cs| cs.method_name == :get }
+      expect(get_call.resolution).to eq('Net::HTTP.get')
+    end
+
+    it 'formats as receiver_source.method_name when not resolved' do
+      file = File.join(fixtures_path, 'assignment_propagation.rb')
+      result = described_class.new(files: [file]).call
+
+      execute_call = result.call_sites.find { |cs| cs.method_name == :execute }
+      expect(execute_call.resolution).to eq('conn.execute')
+    end
+
+    it 'is nil for bare calls' do
+      file = File.join(fixtures_path, 'simple_class.rb')
+      result = described_class.new(files: [file]).call
+
+      puts_call = result.call_sites.find { |cs| cs.method_name == :puts }
+      expect(puts_call.resolution).to be_nil
+    end
+  end
+
+  describe 'Location helper' do
+    it 'provides location objects for all call sites' do
+      file = File.join(fixtures_path, 'simple_class.rb')
+      result = described_class.new(files: [file]).call
+
+      result.call_sites.each do |cs|
+        location = cs.location
+        expect(location).to be_a(FiberAudit::Location)
+        expect(location.path).to eq(file)
+        expect(location.line).to be_a(Integer)
+        expect(location.column).to be_a(Integer)
+      end
+    end
+  end
+end
