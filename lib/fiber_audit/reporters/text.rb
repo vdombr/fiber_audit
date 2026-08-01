@@ -8,6 +8,19 @@ require_relative '../findings/severity'
 module FiberAudit
   module Reporters
     # Text reporter that outputs human-readable audit results.
+    # Calls Schema.build then Schema.validate! to enforce the contract.
+    #
+    # Exact contract:
+    # - Header: `FiberAudit 0.1.0 — static analysis`
+    # - Summary counts, suppressed, status
+    # - Disclaimer under status
+    # - Findings: RULE  SEVERITY  path:line
+    # - Optional: symbol — operation [context]
+    # - message
+    # - (unknown location) fallback
+    # - Footer: Run `fiber-audit explain <RULE_ID>` for rule details.
+    # - ANSI escape constants only in Text::ANSI
+    # - Color ONLY severity labels, not footer/header
     class Text < Base
       # ANSI owns all escape sequences. Color is applied only to severity labels.
       module ANSI
@@ -17,17 +30,16 @@ module FiberAudit
 
         RED = "\e[31m"
         YELLOW = "\e[33m"
-        GREEN = "\e[32m"
-        BLUE = "\e[34m"
+        MAGENTA = "\e[35m"
         CYAN = "\e[36m"
         WHITE = "\e[37m"
 
         SEVERITY_COLORS = {
           critical: RED,
           high: YELLOW,
-          medium: YELLOW,
-          low: GREEN,
-          info: BLUE
+          medium: MAGENTA,
+          low: CYAN,
+          info: CYAN
         }.freeze
 
         module_function
@@ -46,68 +58,65 @@ module FiberAudit
       end
 
       def initialize(color: false)
+        super()
         @color = color
       end
 
       def render(result)
-        # Validate and get deterministic hash (also triggers all validation)
-        hash = Schema.validate!(result)
+        # Build normalized primitive report hash from result protocol
+        report_hash = Schema.build(result)
+
+        # Validate the hash (also freezes it)
+        Schema.validate!(report_hash)
+
         lines = []
 
-        # Header
+        # Header: exact contract
         lines << header
         lines << ''
 
-        # Summary
-        lines << summary_section(hash[:summary])
-        lines << ''
-
-        # Suppressed
-        lines << suppressed_section(hash[:summary])
+        # Summary counts and suppressed/status
+        lines << summary_section(report_hash[:summary])
         lines << ''
 
         # Status
-        lines << status_section(hash[:status])
-        lines << ''
+        lines << status_section(report_hash[:status])
 
-        # Mandatory disclaimer
+        # Mandatory disclaimer under status
         lines << disclaimer_section
         lines << ''
 
-        # Findings (use original objects, sorted by schema)
-        lines << findings_section(hash[:findings])
+        # Findings
+        lines << findings_section(report_hash[:findings])
         lines << ''
 
-        # Footer hint (always present)
+        # Footer hint is always present, including no-findings reports.
         lines << footer_hint
 
-        lines.join("\n") + "\n"
+        "#{lines.join("\n").chomp}\n"
       end
 
       private
 
       def header
-        "FiberAudit Report v#{FiberAudit::VERSION} (schema #{Schema::SCHEMA_VERSION})"
+        "FiberAudit #{FiberAudit::VERSION} — static analysis"
       end
 
       def summary_section(summary)
-        lines = ['Summary:']
-        %i[critical high medium low info].each do |sev|
-          count = summary[sev]
-          label = ANSI.severity_label(sev, color: @color)
-          lines << "  #{label}: #{count}"
+        counts = %i[critical high medium low info].map do |severity|
+          "#{severity}: #{summary[severity]}"
         end
-        lines << "  Suppressed: #{summary[:suppressed]}"
-        lines << "  Total active: #{summary[:total_active]}"
-        lines.join("\n")
-      end
 
-      def suppressed_section(summary)
-        "Suppressed findings: #{summary[:suppressed]}"
+        [
+          'Summary',
+          "  #{counts.join('   ')}",
+          "  suppressed: #{summary[:suppressed]}",
+          "  total: #{summary[:total]}"
+        ].join("\n")
       end
 
       def status_section(status)
-        "Status: #{status}"
+        "  status: #{status}"
       end
 
       def disclaimer_section
@@ -115,60 +124,55 @@ module FiberAudit
       end
 
       def findings_section(findings)
-        if findings.empty?
-          return 'No findings.'
-        end
+        return 'No findings.' if findings.empty?
 
-        lines = ['Findings:']
-        findings.each_with_index do |finding, idx|
-          lines << format_finding(finding, idx + 1)
+        lines = ['Findings']
+        findings.each do |finding|
+          lines << format_finding(finding)
         end
         lines.join("\n")
       end
 
-      def format_finding(finding, number)
+      def format_finding(finding)
         lines = []
-        severity = finding.severity
+        severity = finding[:severity].to_sym
         label = ANSI.severity_label(severity, color: @color)
 
-        lines << "  #{number}. [#{label}] #{finding.rule_id}"
+        # RULE  SEVERITY  path:line
+        location_str = format_location(finding[:location])
+        lines << "  #{finding[:rule_id]}  #{label}  #{location_str}"
 
-        # Location - stable "unknown" when absent
-        if finding.location
-          loc_str = finding.location.path.to_s
-          loc_str += ":#{finding.location.line}" if finding.location.line
-          loc_str += ":#{finding.location.column}" if finding.location.column
-          lines << "     Location: #{loc_str}"
-        else
-          lines << '     Location: <unknown>'
-        end
-
-        # Omit absent symbol
-        lines << "     Symbol: #{finding.symbol}" if finding.symbol
-
-        # Omit absent operation
-        lines << "     Operation: #{finding.operation}" if finding.operation
-
-        # Omit absent execution_context
-        lines << "     Context: #{finding.execution_context}" if finding.execution_context
-
-        lines << "     Confidence: #{finding.confidence}"
-        lines << "     Message: #{finding.message}"
-
-        # Evidence
-        if finding.evidence && !finding.evidence.empty?
-          lines << '     Evidence:'
-          finding.evidence.each do |ev|
-            lines << "       - #{ev.source}: #{ev.message}"
+        # Optional: symbol — operation [context]
+        optional_parts = []
+        optional_parts << finding[:symbol] if finding[:symbol]
+        if finding[:operation]
+          if finding[:symbol]
+            optional_parts[-1] = "#{finding[:symbol]} — #{finding[:operation]}"
+          else
+            optional_parts << finding[:operation]
           end
         end
+        optional_parts << "[#{finding[:execution_context]}]" if finding[:execution_context]
+
+        lines << "     #{optional_parts.join(' ')}" if optional_parts.any?
+
+        # message
+        lines << "     #{finding[:message]}"
 
         lines.join("\n")
+      end
+
+      def format_location(location)
+        return '(unknown location)' if location.nil?
+
+        path = location[:path].to_s
+        line = location[:line]
+
+        line ? "#{path}:#{line}" : path
       end
 
       def footer_hint
-        label = @color ? ANSI.colorize('Hint:', ANSI::CYAN) : 'Hint:'
-        "#{label} Use --format json for machine-readable output."
+        'Run `fiber-audit explain <RULE_ID>` for rule details.'
       end
     end
   end

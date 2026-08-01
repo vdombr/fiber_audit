@@ -176,7 +176,7 @@ RSpec.describe FiberAudit::Static::CallSiteExtractor do
         # Should have at least 2 join calls (assignment-based + direct)
         expect(join_calls.size).to be >= 2
 
-        direct_join = join_calls.find { |cs| cs.receiver_source == 'Thread.new' }
+        direct_join = join_calls.find { |cs| cs.receiver_source&.start_with?('Thread.new') }
         expect(direct_join).not_to be_nil
         expect(direct_join.receiver_constant).to eq('Thread')
         expect(direct_join.confidence).to eq(:high)

@@ -1,5 +1,9 @@
 # frozen_string_literal: true
 
+# Test rules preserve the production keyword API even when call sites are not
+# needed by registry-focused examples.
+# rubocop:disable Lint/UnusedMethodArgument
+
 require 'fiber_audit/static/rules/registry'
 require 'fiber_audit/static/rules/base'
 require 'fiber_audit/configuration'
@@ -235,8 +239,7 @@ RSpec.describe FiberAudit::Static::Rules::Registry do
     end
 
     it 'supports each' do
-      ids = []
-      registry.each { |rule_class| ids << rule_class.id }
+      ids = registry.map(&:id)
       expect(ids).to eq(%w[FA1001 FA1002])
     end
 
@@ -428,3 +431,5 @@ RSpec.describe FiberAudit::Static::Rules::Registry do
     end
   end
 end
+
+# rubocop:enable Lint/UnusedMethodArgument

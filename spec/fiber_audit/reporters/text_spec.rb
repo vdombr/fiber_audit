@@ -52,75 +52,77 @@ RSpec.describe FiberAudit::Reporters::Text do
         expect(output).to match(/\n\z/)
       end
 
-      it 'includes header with version' do
+      it 'includes exact header contract' do
         reporter = described_class.new(color: false)
         output = reporter.render(result)
 
-        expect(output).to include('FiberAudit Report')
-        expect(output).to include(FiberAudit::VERSION)
-        expect(output).to include('schema 1.0')
+        expect(output).to include('FiberAudit 0.1.0 — static analysis')
       end
 
-      it 'includes summary section with severity counts' do
+      it 'includes summary severity, suppressed, and total counts' do
         reporter = described_class.new(color: false)
         output = reporter.render(result)
 
-        expect(output).to include('Summary:')
-        expect(output).to include('CRITICAL: 0')
-        expect(output).to include('HIGH: 1')
-        expect(output).to include('MEDIUM: 0')
-        expect(output).to include('LOW: 0')
-        expect(output).to include('INFO: 0')
-        expect(output).to include('Suppressed: 0')
-        expect(output).to include('Total active: 1')
-      end
-
-      it 'includes suppressed findings section' do
-        reporter = described_class.new(color: false)
-        output = reporter.render(result)
-
-        expect(output).to include('Suppressed findings: 0')
+        expect(output).to include('Summary')
+        expect(output).to include('critical: 0')
+        expect(output).to include('high: 1')
+        expect(output).to include('medium: 0')
+        expect(output).to include('low: 0')
+        expect(output).to include('info: 0')
+        expect(output).to include('suppressed: 0')
+        expect(output).to include('total: 1')
       end
 
       it 'includes status section' do
         reporter = described_class.new(color: false)
         output = reporter.render(result)
 
-        expect(output).to include('Status: FAIL')
+        expect(output).to include('status: FAIL')
       end
 
-      it 'includes mandatory disclaimer' do
+      it 'includes mandatory disclaimer under status' do
         reporter = described_class.new(color: false)
         output = reporter.render(result)
 
         expect(output).to include(FiberAudit::Reporters::Schema::DISCLAIMER)
+
+        # Disclaimer should appear after Status
+        status_pos = output.index('status:')
+        disclaimer_pos = output.index(FiberAudit::Reporters::Schema::DISCLAIMER)
+        expect(disclaimer_pos).to be > status_pos
       end
 
-      it 'includes findings section' do
+      it 'includes findings with RULE  SEVERITY  path:line format' do
         reporter = described_class.new(color: false)
         output = reporter.render(result)
 
-        expect(output).to include('Findings:')
-        expect(output).to include('thread_local_access')
-        expect(output).to include('app/models/user.rb:42:10')
-        expect(output).to include('User#load_data')
-        expect(output).to include('Thread.current[:data]')
-        expect(output).to include('web_request')
-        expect(output).to include('confirmed')
+        expect(output).to include('Findings')
+        expect(output).to include('thread_local_access  HIGH  app/models/user.rb:42')
+        expect(output).not_to include('app/models/user.rb:42:10')
+      end
+
+      it 'includes symbol — operation [context]' do
+        reporter = described_class.new(color: false)
+        output = reporter.render(result)
+
+        expect(output).to include('User#load_data — Thread.current[:data] [web_request]')
+      end
+
+      it 'includes message' do
+        reporter = described_class.new(color: false)
+        output = reporter.render(result)
+
         expect(output).to include('Thread-local variables are not fiber-safe')
-        expect(output).to include('Evidence:')
-        expect(output).to include('AST: Thread-local access detected')
       end
 
-      it 'includes footer hint' do
+      it 'includes footer hint with exact rule explain instruction' do
         reporter = described_class.new(color: false)
         output = reporter.render(result)
 
-        expect(output).to include('Hint:')
-        expect(output).to include('Use --format json for machine-readable output')
+        expect(output).to include('Run `fiber-audit explain <RULE_ID>` for rule details.')
       end
 
-      it 'does not include ANSI color codes' do
+      it 'does not include ANSI color codes when color: false' do
         reporter = described_class.new(color: false)
         output = reporter.render(result)
 
@@ -129,19 +131,30 @@ RSpec.describe FiberAudit::Reporters::Text do
     end
 
     context 'with color: true' do
-      it 'includes ANSI color codes for severity labels' do
+      it 'includes ANSI color codes only for severity labels' do
         reporter = described_class.new(color: true)
         output = reporter.render(result)
 
-        expect(output).to include("\e[") # ANSI escape codes present
+        expect(output).to include("\e[")
         expect(output).to include(FiberAudit::Reporters::Text::ANSI::YELLOW)
       end
 
-      it 'includes footer hint with color' do
+      it 'does not colorize header' do
         reporter = described_class.new(color: true)
         output = reporter.render(result)
 
-        expect(output).to include(FiberAudit::Reporters::Text::ANSI::CYAN)
+        header_line = output.lines.find { |l| l.include?('static analysis') }
+        expect(header_line).not_to include("\e[")
+      end
+
+      it 'does not colorize footer' do
+        reporter = described_class.new(color: true)
+        output = reporter.render(result)
+
+        footer_lines = output.lines.select { |l| l.include?('fiber-audit explain') }
+        footer_lines.each do |line|
+          expect(line).not_to include("\e[")
+        end
       end
     end
 
@@ -171,90 +184,15 @@ RSpec.describe FiberAudit::Reporters::Text do
         reporter = described_class.new(color: false)
         output = reporter.render(empty_result)
 
-        expect(output).to include('CRITICAL: 0')
-        expect(output).to include('HIGH: 0')
-        expect(output).to include('Total active: 0')
-      end
-    end
-
-    context 'with finding without optional fields' do
-      it 'omits absent symbol' do
-        finding_no_symbol = FiberAudit::Finding.new(
-          rule_id: 'test',
-          category: 'test',
-          severity: :high,
-          confidence: :confirmed,
-          location: location,
-          message: 'test message',
-          evidence: evidence
-        )
-
-        result_no_symbol = double('result',
-                                  findings: [finding_no_symbol],
-                                  suppressed: [],
-                                  parse_errors: [],
-                                  coverage: coverage,
-                                  status: 'FAIL')
-
-        reporter = described_class.new(color: false)
-        output = reporter.render(result_no_symbol)
-
-        expect(output).not_to include('Symbol:')
-      end
-
-      it 'omits absent operation' do
-        finding_no_op = FiberAudit::Finding.new(
-          rule_id: 'test',
-          category: 'test',
-          severity: :high,
-          confidence: :confirmed,
-          location: location,
-          symbol: 'TestClass#method',
-          message: 'test message',
-          evidence: evidence
-        )
-
-        result_no_op = double('result',
-                              findings: [finding_no_op],
-                              suppressed: [],
-                              parse_errors: [],
-                              coverage: coverage,
-                              status: 'FAIL')
-
-        reporter = described_class.new(color: false)
-        output = reporter.render(result_no_op)
-
-        expect(output).not_to include('Operation:')
-      end
-
-      it 'omits absent execution_context' do
-        finding_no_ctx = FiberAudit::Finding.new(
-          rule_id: 'test',
-          category: 'test',
-          severity: :high,
-          confidence: :confirmed,
-          location: location,
-          symbol: 'TestClass#method',
-          message: 'test message',
-          evidence: evidence
-        )
-
-        result_no_ctx = double('result',
-                               findings: [finding_no_ctx],
-                               suppressed: [],
-                               parse_errors: [],
-                               coverage: coverage,
-                               status: 'FAIL')
-
-        reporter = described_class.new(color: false)
-        output = reporter.render(result_no_ctx)
-
-        expect(output).not_to include('Context:')
+        expect(output).to include('critical: 0')
+        expect(output).to include('high: 0')
+        expect(output).to include('total: 0')
+        expect(output).to include('Run `fiber-audit explain <RULE_ID>` for rule details.')
       end
     end
 
     context 'with finding without location' do
-      it 'renders stable unknown location' do
+      it 'renders (unknown location) fallback' do
         finding_no_loc = FiberAudit::Finding.new(
           rule_id: 'test',
           category: 'test',
@@ -274,12 +212,39 @@ RSpec.describe FiberAudit::Reporters::Text do
         reporter = described_class.new(color: false)
         output = reporter.render(result_no_loc)
 
-        expect(output).to include('Location: <unknown>')
+        expect(output).to include('(unknown location)')
+      end
+    end
+
+    context 'with finding without optional fields' do
+      it 'omits absent symbol and operation line' do
+        finding_minimal = FiberAudit::Finding.new(
+          rule_id: 'test',
+          category: 'test',
+          severity: :high,
+          confidence: :confirmed,
+          location: location,
+          message: 'test message',
+          evidence: evidence
+        )
+
+        result_minimal = double('result',
+                                findings: [finding_minimal],
+                                suppressed: [],
+                                parse_errors: [],
+                                coverage: coverage,
+                                status: 'FAIL')
+
+        reporter = described_class.new(color: false)
+        output = reporter.render(result_minimal)
+
+        finding_lines = output.lines.drop_while { |line| !line.start_with?('  test  HIGH') }
+        expect(finding_lines[1]).to include('test message')
       end
     end
 
     context 'with multiple findings' do
-      it 'sorts findings by severity' do
+      it 'sorts findings by severity and includes the stable footer hint' do
         loc = FiberAudit::Location.new(path: 'test.rb', line: 1, column: 1)
 
         finding_critical = FiberAudit::Finding.new(
@@ -329,6 +294,7 @@ RSpec.describe FiberAudit::Reporters::Text do
 
         expect(critical_pos).to be < high_pos
         expect(high_pos).to be < low_pos
+        expect(output.scan('Run `fiber-audit explain <RULE_ID>`').size).to eq(1)
       end
     end
 
@@ -354,8 +320,7 @@ RSpec.describe FiberAudit::Reporters::Text do
         reporter = described_class.new(color: false)
         output = reporter.render(result_suppressed)
 
-        expect(output).to include('Suppressed: 1')
-        expect(output).to include('Suppressed findings: 1')
+        expect(output).to include('suppressed: 1')
       end
     end
 
@@ -394,13 +359,13 @@ RSpec.describe FiberAudit::Reporters::Text do
 
         it 'returns colored label for low' do
           label = described_class::ANSI.severity_label(:low, color: true)
-          expect(label).to include(described_class::ANSI::GREEN)
+          expect(label).to include(described_class::ANSI::CYAN)
           expect(label).to include('LOW')
         end
 
         it 'returns colored label for info' do
           label = described_class::ANSI.severity_label(:info, color: true)
-          expect(label).to include(described_class::ANSI::BLUE)
+          expect(label).to include(described_class::ANSI::CYAN)
           expect(label).to include('INFO')
         end
       end

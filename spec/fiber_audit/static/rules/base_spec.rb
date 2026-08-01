@@ -1,5 +1,9 @@
 # frozen_string_literal: true
 
+# Test rules preserve the production keyword API even when their inputs are
+# irrelevant, and table constants are scoped to this example group.
+# rubocop:disable Lint/UnusedMethodArgument, Lint/ConstantDefinitionInBlock
+
 require 'fiber_audit/static/rules/base'
 require 'fiber_audit/configuration'
 
@@ -67,9 +71,9 @@ RSpec.describe FiberAudit::Static::Rules::Base do
     end
 
     it 'raises ArgumentError for invalid severity' do
-      expect {
+      expect do
         Class.new(described_class) { severity :extreme }
-      }.to raise_error(ArgumentError, /unknown severity/)
+      end.to raise_error(ArgumentError, /unknown severity/)
     end
 
     it 'sets and returns the default confidence via confidence DSL' do
@@ -81,9 +85,9 @@ RSpec.describe FiberAudit::Static::Rules::Base do
     end
 
     it 'raises ArgumentError for invalid confidence' do
-      expect {
+      expect do
         Class.new(described_class) { confidence :definite }
-      }.to raise_error(ArgumentError, /unknown confidence/)
+      end.to raise_error(ArgumentError, /unknown confidence/)
     end
 
     it 'coerces confidence on set' do
@@ -588,7 +592,7 @@ RSpec.describe FiberAudit::Static::Rules::Base do
     # All severity levels and all contexts
     SEVERITIES = %i[critical high medium low info].freeze
     CONTEXTS   = %i[request middleware websocket callback view job
-                     boot console test rake_task unknown].freeze
+                    boot console test rake_task unknown].freeze
 
     # Expected result matrix: [default_severity][context] = expected_severity
     EXPECTED = {
@@ -639,9 +643,11 @@ RSpec.describe FiberAudit::Static::Rules::Base do
           result = rule_for_matrix.call_severity_for(default_sev, ctx)
           expect(FiberAudit::Severity.index(result))
             .to be <= FiberAudit::Severity.index(default_sev),
-            "severity_for(#{default_sev}, #{ctx}) = #{result} is less severe than #{default_sev}"
+                "severity_for(#{default_sev}, #{ctx}) = #{result} is less severe than #{default_sev}"
         end
       end
     end
   end
 end
+
+# rubocop:enable Lint/UnusedMethodArgument, Lint/ConstantDefinitionInBlock

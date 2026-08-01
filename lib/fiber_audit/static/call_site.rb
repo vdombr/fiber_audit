@@ -59,7 +59,7 @@ module FiberAudit
 
       # Returns a Location object for this call site
       def location
-        @location ||= FiberAudit::Location.new(path: path, line: line, column: column)
+        FiberAudit::Location.new(path: path, line: line, column: column)
       end
 
       # Returns method_name as a Symbol or nil (convenience accessor)

@@ -1,7 +1,9 @@
 # frozen_string_literal: true
 
+# Spec-local support constants intentionally model immutable public contracts.
+# rubocop:disable Lint/ConstantDefinitionInBlock
+
 require 'spec_helper'
-require 'set'
 require 'fiber_audit/static/execution_context_resolver'
 
 RSpec.describe FiberAudit::Static::ExecutionContextResolver do
@@ -28,7 +30,7 @@ RSpec.describe FiberAudit::Static::ExecutionContextResolver do
       resolution: 'Open3.capture3',
       confidence: :high
     }
-    TestCallSite.new(**defaults.merge(attrs))
+    TestCallSite.new(**defaults, **attrs)
   end
 
   # Mock workspace that responds to ancestors_of
@@ -58,7 +60,7 @@ RSpec.describe FiberAudit::Static::ExecutionContextResolver do
 
       it 'requires call_site: keyword argument' do
         call_site = build_call_site
-        expect(resolver).to respond_to(:resolve).with(1).argument
+        expect(resolver.method(:resolve).parameters).to eq([%i[keyreq call_site]])
         expect { resolver.resolve(call_site: call_site) }.not_to raise_error
       end
 
@@ -459,7 +461,7 @@ RSpec.describe FiberAudit::Static::ExecutionContextResolver do
       it 'handles cyclic ancestors without infinite recursion' do
         cyclic_workspace = MockWorkspace.new(
           'ClassA' => ['ClassB'],
-          'ClassB' => ['ClassA']  # cycle: A -> B -> A
+          'ClassB' => ['ClassA'] # cycle: A -> B -> A
         )
         cyclic_resolver = described_class.new(workspace: cyclic_workspace)
         call_site = build_call_site(
@@ -485,7 +487,7 @@ RSpec.describe FiberAudit::Static::ExecutionContextResolver do
       it 'finds signal through cycle if ancestor is a signal' do
         cycle_with_signal_workspace = MockWorkspace.new(
           'ClassX' => ['ClassY', 'ActionController::Base'],
-          'ClassY' => ['ClassX']  # cycle: Y -> X, but X has signal ancestor
+          'ClassY' => ['ClassX'] # cycle: Y -> X, but X has signal ancestor
         )
         cycle_resolver = described_class.new(workspace: cycle_with_signal_workspace)
         call_site = build_call_site(
@@ -652,7 +654,7 @@ RSpec.describe FiberAudit::Static::ExecutionContextResolver do
     context 'keyword-only invocation' do
       it 'requires call_sites: keyword argument' do
         call_sites = [build_call_site(enclosing_symbol: 'UsersController#index', nesting: ['UsersController'])]
-        expect(resolver).to respond_to(:resolve_all).with(1).argument
+        expect(resolver.method(:resolve_all).parameters).to eq([%i[keyreq call_sites]])
         expect { resolver.resolve_all(call_sites: call_sites) }.not_to raise_error
       end
 
@@ -787,10 +789,12 @@ RSpec.describe FiberAudit::Static::ExecutionContextResolver do
     it 'ALL is frozen and contains all contexts in order' do
       expect(FiberAudit::Context::ALL).to be_frozen
       expect(FiberAudit::Context::ALL.size).to eq(11)
-      expect(FiberAudit::Context::ALL).to eq([
-        :request, :middleware, :callback, :view, :job, :websocket,
-        :boot, :console, :rake_task, :test, :unknown
-      ])
+      expect(FiberAudit::Context::ALL).to eq(%i[
+                                               request middleware callback view job websocket
+                                               boot console rake_task test unknown
+                                             ])
     end
   end
 end
+
+# rubocop:enable Lint/ConstantDefinitionInBlock

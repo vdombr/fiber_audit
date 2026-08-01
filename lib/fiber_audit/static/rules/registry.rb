@@ -76,8 +76,8 @@ module FiberAudit
         #
         # @yieldparam rule_class [Class] each registered rule class
         # @return [Enumerator] if no block given
-        def each(&block)
-          @rules.each(&block)
+        def each(&)
+          @rules.each(&)
         end
 
         # Instantiate all enabled rules for the given configuration.
@@ -89,9 +89,9 @@ module FiberAudit
         # @param configuration [FiberAudit::Configuration] audit configuration
         # @return [Array<Base>] array of instantiated rule objects
         def enabled_for(configuration)
-          @rules.select do |rule_class|
-            configuration.rule_enabled?(rule_class.id)
-          end.map do |rule_class|
+          @rules.filter_map do |rule_class|
+            next unless configuration.rule_enabled?(rule_class.id)
+
             rule_class.new(
               workspace: @workspace,
               context_resolver: @context_resolver,
@@ -112,10 +112,10 @@ module FiberAudit
                   "rule_class must be a subclass of Base, got #{rule_class.inspect}"
           end
 
-          if rule_class.id.nil? || rule_class.id.empty?
-            raise ArgumentError,
-                  'rule_class must have an id set via the DSL'
-          end
+          return unless rule_class.id.nil? || rule_class.id.empty?
+
+          raise ArgumentError,
+                'rule_class must have an id set via the DSL'
         end
       end
     end

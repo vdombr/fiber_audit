@@ -57,21 +57,21 @@ RSpec.describe FiberAudit::Reporters::JSON do
         reporter = described_class.new(pretty: false)
         output = reporter.render(result)
 
-        expect { ::JSON.parse(output) }.not_to raise_error
+        expect { JSON.parse(output) }.not_to raise_error
       end
 
-      it 'normalizes symbol keys to strings' do
+      it 'normalizes symbol keys to strings in JSON output' do
         reporter = described_class.new(pretty: false)
         output = reporter.render(result)
-        parsed = ::JSON.parse(output)
+        parsed = JSON.parse(output)
 
         expect(parsed.keys).to all(be_a(String))
       end
 
-      it 'normalizes symbol values to strings' do
+      it 'normalizes severity and confidence to string values' do
         reporter = described_class.new(pretty: false)
         output = reporter.render(result)
-        parsed = ::JSON.parse(output)
+        parsed = JSON.parse(output)
 
         expect(parsed['findings'][0]['severity']).to eq('high')
         expect(parsed['findings'][0]['confidence']).to eq('confirmed')
@@ -80,13 +80,29 @@ RSpec.describe FiberAudit::Reporters::JSON do
       it 'maintains deterministic top-level key order' do
         reporter = described_class.new(pretty: false)
         output = reporter.render(result)
-        parsed = ::JSON.parse(output)
+        parsed = JSON.parse(output)
 
         expected_keys = %w[
           schema_version tool_version status disclaimer summary
           coverage findings suppressed parse_errors
         ]
         expect(parsed.keys).to eq(expected_keys)
+      end
+
+      it 'includes summary with total key' do
+        reporter = described_class.new(pretty: false)
+        output = reporter.render(result)
+        parsed = JSON.parse(output)
+
+        expect(parsed['summary']).to include(
+          'critical' => 0,
+          'high' => 1,
+          'medium' => 0,
+          'low' => 0,
+          'info' => 0,
+          'suppressed' => 0,
+          'total' => 1
+        )
       end
     end
 
@@ -96,23 +112,23 @@ RSpec.describe FiberAudit::Reporters::JSON do
         output = reporter.render(result)
 
         expect(output).to end_with("\n")
-        expect(output.count("\n")).to be > 1 # Pretty printed has multiple lines
-        expect(output).to match(/\n\z/) # Ends with newline
+        expect(output.count("\n")).to be > 1
+        expect(output).to match(/\n\z/)
       end
 
       it 'produces valid JSON' do
         reporter = described_class.new(pretty: true)
         output = reporter.render(result)
 
-        expect { ::JSON.parse(output) }.not_to raise_error
+        expect { JSON.parse(output) }.not_to raise_error
       end
 
       it 'includes formatting whitespace' do
         reporter = described_class.new(pretty: true)
         output = reporter.render(result)
 
-        expect(output).to include("  ") # Indentation
-        expect(output).to include("\n") # Newlines
+        expect(output).to include('  ')
+        expect(output).to include("\n")
       end
     end
 
@@ -127,7 +143,7 @@ RSpec.describe FiberAudit::Reporters::JSON do
 
         reporter = described_class.new(pretty: false)
         output = reporter.render(empty_result)
-        parsed = ::JSON.parse(output)
+        parsed = JSON.parse(output)
 
         expect(parsed['findings']).to eq([])
         expect(parsed['status']).to eq('NO_FINDINGS')
@@ -155,7 +171,7 @@ RSpec.describe FiberAudit::Reporters::JSON do
 
         reporter = described_class.new(pretty: false)
         output = reporter.render(result_with_suppressed)
-        parsed = ::JSON.parse(output)
+        parsed = JSON.parse(output)
 
         expect(parsed['findings'].size).to eq(1)
         expect(parsed['suppressed'].size).to eq(1)
@@ -177,7 +193,7 @@ RSpec.describe FiberAudit::Reporters::JSON do
 
         reporter = described_class.new(pretty: false)
         output = reporter.render(result_with_errors)
-        parsed = ::JSON.parse(output)
+        parsed = JSON.parse(output)
 
         expect(parsed['parse_errors']).to eq([
                                                { 'path' => 'broken.rb', 'message' => 'syntax error', 'line' => 42 },
@@ -196,12 +212,27 @@ RSpec.describe FiberAudit::Reporters::JSON do
     end
 
     it 'uses ::JSON to avoid class collision' do
-      # This test ensures we're using the top-level ::JSON module
       reporter = described_class.new(pretty: false)
       output = reporter.render(result)
 
-      # If we were using FiberAudit::Reporters::JSON by mistake, this would fail
-      expect { ::JSON.parse(output) }.not_to raise_error
+      expect { JSON.parse(output) }.not_to raise_error
+    end
+
+    it 'normalizes nested objects to JSON primitives' do
+      reporter = described_class.new(pretty: false)
+      output = reporter.render(result)
+      parsed = JSON.parse(output)
+
+      finding_json = parsed['findings'][0]
+
+      # Location should be a hash, not a Location object
+      expect(finding_json['location']).to be_a(Hash)
+      expect(finding_json['location']['path']).to eq('app/models/user.rb')
+
+      # Evidence should be an array of hashes
+      expect(finding_json['evidence']).to be_an(Array)
+      expect(finding_json['evidence'][0]).to be_a(Hash)
+      expect(finding_json['evidence'][0]['source']).to eq('AST')
     end
   end
 end

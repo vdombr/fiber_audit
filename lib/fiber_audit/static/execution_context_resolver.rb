@@ -1,7 +1,6 @@
 # frozen_string_literal: true
 
 require_relative '../execution_context'
-require 'set'
 
 module FiberAudit
   module Static
@@ -20,7 +19,7 @@ module FiberAudit
       SEMANTIC_SIGNALS = {
         'ActionController::Base' => Context::REQUEST,
         'ActionController::API' => Context::REQUEST,
-        'ActionJob::Base' => Context::JOB,  # typo tolerance
+        'ActionJob::Base' => Context::JOB, # typo tolerance
         'ActiveJob::Base' => Context::JOB,
         'ActionCable::Channel::Base' => Context::WEBSOCKET,
         'ActionView::Base' => Context::VIEW
@@ -95,8 +94,6 @@ module FiberAudit
           enclosing_symbol.split('#', 2).first
         elsif enclosing_symbol.include?('.')
           enclosing_symbol.split('.', 2).first
-        else
-          nil
         end
       end
 
@@ -110,8 +107,6 @@ module FiberAudit
           enclosing_symbol.split('#', 2).last
         elsif enclosing_symbol.include?('.')
           enclosing_symbol.split('.', 2).last
-        else
-          nil
         end
       end
 
@@ -140,6 +135,7 @@ module FiberAudit
       def check_semantic_ancestors_transitive(class_name, visited = Set.new)
         return nil unless class_name
         return nil if visited.include?(class_name)
+
         visited.add(class_name)
 
         # Match the class itself first (known class signal, even if ancestors empty)
@@ -201,11 +197,13 @@ module FiberAudit
 
       # Check if two segments appear contiguously in the path
       # @param segments [Array<String>] path segments
-      # @param a [String] first segment
-      # @param b [String] second segment
-      # @return [Boolean] true if a is immediately followed by b
-      def contiguous_pair?(segments, a, b)
-        segments.each_cons(2).any? { |x, y| x == a && y == b }
+      # @param first [String] first segment
+      # @param second [String] second segment
+      # @return [Boolean] true when first is immediately followed by second
+      def contiguous_pair?(segments, first, second)
+        segments.each_cons(2).any? do |left, right|
+          left == first && right == second
+        end
       end
 
       # Resolve callback DSL

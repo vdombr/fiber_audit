@@ -86,7 +86,7 @@ RSpec.describe FiberAudit::Static::CallSite do
       )
 
       expect(cs.arguments).to be_frozen
-      expect { args << 'mutated' }.not_to change { cs.arguments }
+      expect { args << 'mutated' }.not_to(change { cs.arguments })
     end
 
     it 'freezes nesting to prevent caller mutation' do
@@ -99,7 +99,7 @@ RSpec.describe FiberAudit::Static::CallSite do
       )
 
       expect(cs.nesting).to be_frozen
-      expect { nesting << 'Bar' }.not_to change { cs.nesting }
+      expect { nesting << 'Bar' }.not_to(change { cs.nesting })
     end
 
     it 'duplicates arguments so caller cannot mutate via original reference' do

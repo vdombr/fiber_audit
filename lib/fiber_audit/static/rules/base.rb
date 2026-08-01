@@ -37,17 +37,17 @@ module FiberAudit
         # A nil ceiling (unknown context) means no upgrade is applied.
         #
         CONTEXT_CEILING = {
-          request:    :critical,
+          request: :critical,
           middleware: :critical,
-          websocket:  :critical,
-          callback:   :high,
-          view:       :high,
-          job:        :high,
-          boot:       :medium,
-          console:    :info,
-          test:       :info,
-          rake_task:  :low,
-          unknown:    nil
+          websocket: :critical,
+          callback: :high,
+          view: :high,
+          job: :high,
+          boot: :medium,
+          console: :info,
+          test: :info,
+          rake_task: :low,
+          unknown: nil
         }.freeze
 
         class << self

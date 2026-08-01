@@ -94,7 +94,7 @@ module FiberAudit
         visitor.visit(parse_result.value)
 
         call_sites.concat(visitor.call_sites)
-      rescue Errno::ENOENT => e
+      rescue Errno::ENOENT
         parse_errors << ParseError.new(
           path: file_path,
           message: "No such file or directory: #{file_path}",
@@ -108,7 +108,9 @@ module FiberAudit
         )
       end
 
-      # Internal visitor that walks the AST and extracts call sites
+      # Internal visitor that walks the AST and extracts call sites. Keeping the
+      # traversal state together makes scope propagation explicit.
+      # rubocop:disable Metrics/ClassLength
       class ASTVisitor
         attr_reader :call_sites
 
@@ -140,11 +142,7 @@ module FiberAudit
             visit_singleton_class(node)
           when Prism::DefNode
             visit_def(node)
-          when Prism::IfNode
-            visit_branching(node)
-          when Prism::UnlessNode
-            visit_branching(node)
-          when Prism::CaseNode
+          when Prism::IfNode, Prism::UnlessNode, Prism::CaseNode
             visit_branching(node)
           when Prism::CallNode
             visit_call(node)
@@ -277,12 +275,8 @@ module FiberAudit
             compute_call_assignment_info(value_node)
           when Prism::ConstantReadNode, Prism::ConstantPathNode
             # Direct constant assignment: `x = SomeConst`
-            const_name = extract_constant_from_node(value_node)
-            if const_name && resolved_constant?(const_name)
-              { constant: const_name, confidence: :high }
-            end
-          else
-            nil
+            resolved = resolve_constant_name(extract_constant_from_node(value_node))
+            { constant: resolved, confidence: :high } if resolved
           end
         end
 
@@ -290,13 +284,11 @@ module FiberAudit
           if call_node.name == :new && call_node.receiver
             # Constructor call: `x = SomeConst.new(...)`
             receiver_const = extract_constant_from_node(call_node.receiver)
-            if receiver_const && resolved_constant?(receiver_const)
-              { constant: receiver_const, confidence: :high }
-            elsif receiver_const
-              # Unresolved constant.new -> textual low, do NOT fabricate high
-              { constant: receiver_const, confidence: :low }
+            resolved = resolve_constant_name(receiver_const)
+            if resolved
+              { constant: resolved, confidence: :high }
             else
-              # Bare .new with no constant receiver -> low
+              # Unresolved or bare .new stays heuristic; never fabricate high.
               { constant: nil, confidence: :low }
             end
           else
@@ -305,16 +297,15 @@ module FiberAudit
           end
         end
 
+        def resolve_constant_name(const_name)
+          return nil unless const_name
+
+          semantic_receiver_constant(const_name) || well_known_receiver_constant(const_name)
+        end
+
         # Check if a constant name is resolvable (well-known or semantic index)
         def resolved_constant?(const_name)
-          return true if WELL_KNOWN_CONSTANTS.include?(const_name)
-          return false unless @semantic_index
-
-          begin
-            @semantic_index.resolve_constant(const_name, nesting: @nesting_stack.dup) != nil
-          rescue StandardError
-            false
-          end
+          !resolve_constant_name(const_name).nil?
         end
 
         # --- Call site building ---
@@ -370,44 +361,48 @@ module FiberAudit
         def resolve_receiver_constant(node, receiver_source)
           return nil unless receiver_source
 
-          # 1. Direct constructor chain: `Thread.new.join` -> infer Thread
-          if node.receiver.is_a?(Prism::CallNode) && node.receiver.name == :new
-            chain_const = extract_chain_constructor(node.receiver)
-            return chain_const if chain_const
-          end
+          inferred = chained_constructor_constant(node) ||
+                     assigned_receiver_constant(node) ||
+                     direct_receiver_constant(node)
+          return inferred if inferred
 
-          # 2. Local variable with tracked assignment
-          if node.receiver.is_a?(Prism::LocalVariableReadNode)
-            var_name = node.receiver.name.to_s
-            info = @assignment_scope[var_name]
-            return info[:constant] if info && info[:confidence] == :high
-          end
+          semantic_receiver_constant(receiver_source) ||
+            well_known_receiver_constant(receiver_source)
+        end
 
-          # 3. Direct constant reference: `Open3.capture3`
-          if node.receiver.is_a?(Prism::ConstantReadNode) ||
-             node.receiver.is_a?(Prism::ConstantPathNode)
-            const_name = extract_constant_from_node(node.receiver)
-            return const_name if const_name && resolved_constant?(const_name)
-          end
+        def chained_constructor_constant(node)
+          return unless node.receiver.is_a?(Prism::CallNode) && node.receiver.name == :new
 
-          # 4. Try semantic index for other receiver sources
-          if @semantic_index
-            begin
-              resolved = @semantic_index.resolve_constant(
-                receiver_source,
-                nesting: @nesting_stack.dup
-              )
-              return resolved.name if resolved
-            rescue StandardError
-              # Semantic adapter exception: rescue per receiver, not per file
-              nil
-            end
-          end
+          extract_chain_constructor(node.receiver)
+        end
 
-          # 5. Well-known constants table
-          return receiver_source if WELL_KNOWN_CONSTANTS.include?(receiver_source)
+        def assigned_receiver_constant(node)
+          return unless node.receiver.is_a?(Prism::LocalVariableReadNode)
 
+          info = @assignment_scope[node.receiver.name.to_s]
+          info[:constant] if info && info[:confidence] == :high
+        end
+
+        def direct_receiver_constant(node)
+          return unless node.receiver.is_a?(Prism::ConstantReadNode) ||
+                        node.receiver.is_a?(Prism::ConstantPathNode)
+
+          resolve_constant_name(extract_constant_from_node(node.receiver))
+        end
+
+        def semantic_receiver_constant(receiver_source)
+          return unless @semantic_index
+
+          @semantic_index.resolve_constant(
+            receiver_source,
+            nesting: @nesting_stack.dup
+          )&.name
+        rescue StandardError
           nil
+        end
+
+        def well_known_receiver_constant(receiver_source)
+          receiver_source if WELL_KNOWN_CONSTANTS.include?(receiver_source)
         end
 
         # Extract constructor constant from a direct chain like Thread.new.join
@@ -416,8 +411,7 @@ module FiberAudit
 
           if new_call.receiver.is_a?(Prism::ConstantReadNode) ||
              new_call.receiver.is_a?(Prism::ConstantPathNode)
-            const_name = extract_constant_from_node(new_call.receiver)
-            return const_name if const_name && resolved_constant?(const_name)
+            return resolve_constant_name(extract_constant_from_node(new_call.receiver))
           end
 
           nil
@@ -433,8 +427,6 @@ module FiberAudit
             node.name.to_s
           when Prism::ConstantPathNode
             build_constant_path_string(node)
-          else
-            nil
           end
         end
 
@@ -519,21 +511,16 @@ module FiberAudit
         # --- Method kind determination ---
 
         def determine_method_kind(node)
-          # def self.method -> class method
-          if node.receiver.is_a?(Prism::SelfNode)
-            :class
-          # Inside `class << self; def method` -> class method
-          elsif @in_singleton_class
-            :class
-          else
-            :instance
-          end
+          return :class if node.receiver.is_a?(Prism::SelfNode) || @in_singleton_class
+
+          :instance
         end
 
         def current_enclosing_constant
           @nesting_stack.last
         end
       end
+      # rubocop:enable Metrics/ClassLength
     end
   end
 end
