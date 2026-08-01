@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative '../execution_context'
+require 'set'
 
 module FiberAudit
   module Static
@@ -25,11 +26,9 @@ module FiberAudit
         'ActionView::Base' => Context::VIEW
       }.freeze
 
-      # Callback model-ish ancestors
+      # Callback model ancestors (ActiveRecord/model ancestry only)
       CALLBACK_ANCESTORS = %w[
         ActiveRecord::Base
-        ActiveSupport::Concern
-        ActiveRecord::Callbacks
       ].freeze
 
       # @param workspace [Object] responds to ancestors_of(name) OR exposes semantic_index
@@ -40,7 +39,7 @@ module FiberAudit
       # Resolve context for a single call site
       # @param call_site [CallSite] a call site with path, enclosing_symbol, nesting
       # @return [Symbol] one of Context::ALL
-      def resolve(call_site)
+      def resolve(call_site:)
         path = call_site.path
         enclosing = call_site.enclosing_symbol
         nesting = Array(call_site.nesting)
@@ -67,13 +66,20 @@ module FiberAudit
       #
       # @param call_sites [Array<CallSite>]
       # @return [Array<CallSite>] new array in original order
-      def resolve_all(call_sites)
+      # Never silently returns an unchanged object when copying fails—
+      # unknown is still populated where compatible.
+      def resolve_all(call_sites:)
         Array(call_sites).map do |cs|
-          ctx = resolve(cs)
+          ctx = resolve(call_site: cs)
           copy_with_context(cs, ctx)
         end
       rescue StandardError
-        Array(call_sites).map { |cs| copy_with_context(cs, Context::UNKNOWN) }
+        # If batch fails, try individually with :unknown.
+        # If copy itself fails (not a Data type), let it propagate—
+        # never silently return an unchanged object.
+        Array(call_sites).map do |cs|
+          copy_with_context(cs, Context::UNKNOWN)
+        end
       end
 
       private
@@ -109,63 +115,97 @@ module FiberAudit
         end
       end
 
-      # Try to resolve from semantic ancestry
+      # Try to resolve from semantic ancestry with transitive traversal
       def resolve_from_semantics(enclosing_symbol, nesting)
         # Try enclosing class first
         klass = extract_class(enclosing_symbol)
         if klass
-          result = check_semantic_ancestors(klass)
+          result = check_semantic_ancestors_transitive(klass)
           return result if result
         end
 
         # Try nesting (innermost first)
         nesting.reverse_each do |name|
-          result = check_semantic_ancestors(name)
+          result = check_semantic_ancestors_transitive(name)
           return result if result
         end
 
         nil
       end
 
-      # Check if a class name has known semantic ancestors
-      def check_semantic_ancestors(class_name)
+      # Check class name and its transitive ancestors with cycle detection
+      # @param class_name [String] the class name to check
+      # @param visited [Set] set of already-visited class names (for cycle detection)
+      # @return [Symbol, nil] the context if found, nil otherwise
+      def check_semantic_ancestors_transitive(class_name, visited = Set.new)
         return nil unless class_name
+        return nil if visited.include?(class_name)
+        visited.add(class_name)
 
-        ancestors = ancestors_of(class_name)
+        # Match the class itself first (known class signal, even if ancestors empty)
+        signal = SEMANTIC_SIGNALS[class_name]
+        return signal if signal
+
+        # Get ancestors
+        ancestors = safe_ancestors_of(class_name)
         return nil if ancestors.empty?
 
-        # Check direct class name match
-        SEMANTIC_SIGNALS.each do |signal, ctx|
-          return ctx if ancestors.include?(signal) || class_name == signal
+        # Check each ancestor and recurse transitively
+        ancestors.each do |ancestor_name|
+          # Check if this ancestor is a known signal
+          ancestor_signal = SEMANTIC_SIGNALS[ancestor_name]
+          return ancestor_signal if ancestor_signal
+
+          # Recurse transitively with cycle detection
+          result = check_semantic_ancestors_transitive(ancestor_name, visited)
+          return result if result
         end
 
         nil
       end
 
-      # Resolve from path segments
+      # Resolve from path segments with contiguous boundary-safe sequences
       def resolve_from_path(path, enclosing_symbol)
         return nil unless path
 
-        segments = split_path(path)
+        # Normalize Windows backslashes to forward slashes
+        normalized = path.tr('\\', '/')
+        segments = normalized.split('/')
 
+        # Contiguous boundary-safe sequences
         # config/initializers → boot
-        return Context::BOOT if segments.include?('config') && segments.include?('initializers')
+        return Context::BOOT if contiguous_pair?(segments, 'config', 'initializers')
 
-        # lib/tasks or basename Rakefile → rake_task
-        return Context::RAKE_TASK if segments.include?('tasks') && segments.include?('lib')
-        return Context::RAKE_TASK if File.basename(path) == 'Rakefile'
+        # lib/tasks → rake_task
+        return Context::RAKE_TASK if contiguous_pair?(segments, 'lib', 'tasks')
+
+        # basename Rakefile → rake_task
+        return Context::RAKE_TASK if File.basename(normalized) == 'Rakefile'
 
         # app/views → view
-        return Context::VIEW if segments.include?('app') && segments.include?('views')
+        return Context::VIEW if contiguous_pair?(segments, 'app', 'views')
 
-        # spec or test segment → test
+        # spec or test segment → test (exact segment match, not substring)
         return Context::TEST if segments.include?('spec') || segments.include?('test')
 
-        # config.ru with enclosing #call → middleware
-        return Context::MIDDLEWARE if File.basename(path) == 'config.ru' &&
-                                      enclosing_symbol&.include?('#call')
+        # config.ru requires enclosing instance #call specifically
+        # Must be instance method (#call), not class method (.call)
+        # Must be exactly 'call', not a substring like 'callback'
+        if File.basename(normalized) == 'config.ru'
+          method = extract_method(enclosing_symbol)
+          return Context::MIDDLEWARE if enclosing_symbol&.include?('#') && method == 'call'
+        end
 
         nil
+      end
+
+      # Check if two segments appear contiguously in the path
+      # @param segments [Array<String>] path segments
+      # @param a [String] first segment
+      # @param b [String] second segment
+      # @return [Boolean] true if a is immediately followed by b
+      def contiguous_pair?(segments, a, b)
+        segments.each_cons(2).any? { |x, y| x == a && y == b }
       end
 
       # Resolve callback DSL
@@ -176,20 +216,21 @@ module FiberAudit
         # Method starts with before_/after_/around_
         return nil unless method.start_with?('before_', 'after_', 'around_')
 
-        # Check if any enclosing class has model-ish ancestry
+        # Check if any enclosing class has ActiveRecord/model ancestry
         klass = extract_class(enclosing_symbol)
         candidate_classes = [klass, *nesting].compact
 
         candidate_classes.each do |name|
-          ancestors = ancestors_of(name)
+          ancestors = safe_ancestors_of(name)
           return Context::CALLBACK if ancestors.any? { |a| CALLBACK_ANCESTORS.include?(a) }
         end
 
         nil
       end
 
-      # Get ancestors from workspace
-      def ancestors_of(name)
+      # Get ancestors from workspace safely, never raises
+      # Tries workspace.ancestors_of or workspace.semantic_index.ancestors_of
+      def safe_ancestors_of(name)
         return [] unless name
 
         # Try workspace.ancestors_of directly
@@ -206,25 +247,20 @@ module FiberAudit
         []
       end
 
-      # Split path into segments safely
-      def split_path(path)
-        path.to_s.split('/')
-      end
-
       # Create a new CallSite with execution_context populated
       # Does not mutate the original
+      # Never silently returns the unchanged object
       def copy_with_context(call_site, context)
-        if call_site.class.respond_to?(:members)
-          # Data.define style
-          attrs = call_site.class.members.map { |m| [m, call_site.send(m)] }.to_h
-          attrs[:execution_context] = context
-          call_site.class.new(**attrs)
-        else
-          # Fallback: try to copy manually
-          call_site
+        klass = call_site.class
+        unless klass.respond_to?(:members)
+          # Cannot copy immutably - raise instead of silently returning unchanged
+          raise TypeError, "Cannot immutably copy #{klass}: not a Data type"
         end
-      rescue StandardError
-        call_site
+
+        attrs = {}
+        klass.members.each { |m| attrs[m] = call_site.send(m) }
+        attrs[:execution_context] = context
+        klass.new(**attrs)
       end
     end
   end

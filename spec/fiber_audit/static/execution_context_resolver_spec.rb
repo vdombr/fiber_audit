@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require 'spec_helper'
+require 'set'
 require 'fiber_audit/static/execution_context_resolver'
 
 RSpec.describe FiberAudit::Static::ExecutionContextResolver do
@@ -50,7 +51,28 @@ RSpec.describe FiberAudit::Static::ExecutionContextResolver do
     attr_reader :semantic_index
   end
 
-  describe '#resolve' do
+  describe '#resolve(call_site:)' do
+    context 'keyword-only invocation' do
+      let(:workspace) { MockWorkspace.new }
+      let(:resolver) { described_class.new(workspace: workspace) }
+
+      it 'requires call_site: keyword argument' do
+        call_site = build_call_site
+        expect(resolver).to respond_to(:resolve).with(1).argument
+        expect { resolver.resolve(call_site: call_site) }.not_to raise_error
+      end
+
+      it 'raises ArgumentError when called without keyword' do
+        call_site = build_call_site
+        expect { resolver.resolve(call_site) }.to raise_error(ArgumentError)
+      end
+
+      it 'raises ArgumentError when called with wrong keyword name' do
+        call_site = build_call_site
+        expect { resolver.resolve(cs: call_site) }.to raise_error(ArgumentError)
+      end
+    end
+
     context 'semantic inheritance - request context' do
       let(:workspace) do
         MockWorkspace.new(
@@ -65,7 +87,7 @@ RSpec.describe FiberAudit::Static::ExecutionContextResolver do
           enclosing_symbol: 'UsersController#index',
           nesting: ['UsersController']
         )
-        expect(resolver.resolve(call_site)).to eq(FiberAudit::Context::REQUEST)
+        expect(resolver.resolve(call_site: call_site)).to eq(FiberAudit::Context::REQUEST)
       end
 
       it 'resolves ActionController::API descendant to :request' do
@@ -78,7 +100,7 @@ RSpec.describe FiberAudit::Static::ExecutionContextResolver do
           nesting: ['ApiController'],
           path: 'app/controllers/api_controller.rb'
         )
-        expect(api_resolver.resolve(call_site)).to eq(FiberAudit::Context::REQUEST)
+        expect(api_resolver.resolve(call_site: call_site)).to eq(FiberAudit::Context::REQUEST)
       end
 
       it 'handles indirect inheritance through ApplicationController' do
@@ -86,7 +108,7 @@ RSpec.describe FiberAudit::Static::ExecutionContextResolver do
           enclosing_symbol: 'ApplicationController#base_action',
           nesting: ['ApplicationController']
         )
-        expect(resolver.resolve(call_site)).to eq(FiberAudit::Context::REQUEST)
+        expect(resolver.resolve(call_site: call_site)).to eq(FiberAudit::Context::REQUEST)
       end
     end
 
@@ -105,7 +127,7 @@ RSpec.describe FiberAudit::Static::ExecutionContextResolver do
           nesting: ['ProcessOrderJob'],
           path: 'app/jobs/process_order_job.rb'
         )
-        expect(resolver.resolve(call_site)).to eq(FiberAudit::Context::JOB)
+        expect(resolver.resolve(call_site: call_site)).to eq(FiberAudit::Context::JOB)
       end
 
       it 'tolerates ActionJob::Base typo to :job' do
@@ -118,7 +140,7 @@ RSpec.describe FiberAudit::Static::ExecutionContextResolver do
           nesting: ['TypoJob'],
           path: 'app/jobs/typo_job.rb'
         )
-        expect(typo_resolver.resolve(call_site)).to eq(FiberAudit::Context::JOB)
+        expect(typo_resolver.resolve(call_site: call_site)).to eq(FiberAudit::Context::JOB)
       end
     end
 
@@ -136,7 +158,7 @@ RSpec.describe FiberAudit::Static::ExecutionContextResolver do
           nesting: ['ChatChannel'],
           path: 'app/channels/chat_channel.rb'
         )
-        expect(resolver.resolve(call_site)).to eq(FiberAudit::Context::WEBSOCKET)
+        expect(resolver.resolve(call_site: call_site)).to eq(FiberAudit::Context::WEBSOCKET)
       end
     end
 
@@ -154,7 +176,7 @@ RSpec.describe FiberAudit::Static::ExecutionContextResolver do
           nesting: ['UsersHelper'],
           path: 'app/helpers/users_helper.rb'
         )
-        expect(resolver.resolve(call_site)).to eq(FiberAudit::Context::VIEW)
+        expect(resolver.resolve(call_site: call_site)).to eq(FiberAudit::Context::VIEW)
       end
     end
 
@@ -168,7 +190,7 @@ RSpec.describe FiberAudit::Static::ExecutionContextResolver do
           enclosing_symbol: 'SessionStore#configure',
           nesting: ['SessionStore']
         )
-        expect(resolver.resolve(call_site)).to eq(FiberAudit::Context::BOOT)
+        expect(resolver.resolve(call_site: call_site)).to eq(FiberAudit::Context::BOOT)
       end
 
       it 'resolves lib/tasks to :rake_task' do
@@ -177,7 +199,7 @@ RSpec.describe FiberAudit::Static::ExecutionContextResolver do
           enclosing_symbol: 'DeployTask#run',
           nesting: []
         )
-        expect(resolver.resolve(call_site)).to eq(FiberAudit::Context::RAKE_TASK)
+        expect(resolver.resolve(call_site: call_site)).to eq(FiberAudit::Context::RAKE_TASK)
       end
 
       it 'resolves Rakefile basename to :rake_task' do
@@ -186,7 +208,7 @@ RSpec.describe FiberAudit::Static::ExecutionContextResolver do
           enclosing_symbol: 'main',
           nesting: []
         )
-        expect(resolver.resolve(call_site)).to eq(FiberAudit::Context::RAKE_TASK)
+        expect(resolver.resolve(call_site: call_site)).to eq(FiberAudit::Context::RAKE_TASK)
       end
 
       it 'resolves app/views to :view' do
@@ -195,7 +217,7 @@ RSpec.describe FiberAudit::Static::ExecutionContextResolver do
           enclosing_symbol: 'UsersView#render',
           nesting: []
         )
-        expect(resolver.resolve(call_site)).to eq(FiberAudit::Context::VIEW)
+        expect(resolver.resolve(call_site: call_site)).to eq(FiberAudit::Context::VIEW)
       end
 
       it 'resolves spec segment to :test' do
@@ -204,7 +226,7 @@ RSpec.describe FiberAudit::Static::ExecutionContextResolver do
           enclosing_symbol: 'UserSpec#tests',
           nesting: ['UserSpec']
         )
-        expect(resolver.resolve(call_site)).to eq(FiberAudit::Context::TEST)
+        expect(resolver.resolve(call_site: call_site)).to eq(FiberAudit::Context::TEST)
       end
 
       it 'resolves test segment to :test' do
@@ -213,7 +235,7 @@ RSpec.describe FiberAudit::Static::ExecutionContextResolver do
           enclosing_symbol: 'UserTest#test_valid',
           nesting: ['UserTest']
         )
-        expect(resolver.resolve(call_site)).to eq(FiberAudit::Context::TEST)
+        expect(resolver.resolve(call_site: call_site)).to eq(FiberAudit::Context::TEST)
       end
 
       it 'does NOT resolve my_spec.rb without spec segment to :test' do
@@ -222,16 +244,25 @@ RSpec.describe FiberAudit::Static::ExecutionContextResolver do
           enclosing_symbol: 'MySpecHelper#help',
           nesting: ['MySpecHelper']
         )
-        expect(resolver.resolve(call_site)).to eq(FiberAudit::Context::UNKNOWN)
+        expect(resolver.resolve(call_site: call_site)).to eq(FiberAudit::Context::UNKNOWN)
       end
 
-      it 'resolves config.ru with #call to :middleware' do
+      it 'resolves config.ru with instance #call to :middleware' do
         call_site = build_call_site(
           path: 'config.ru',
           enclosing_symbol: 'MyMiddleware#call',
           nesting: ['MyMiddleware']
         )
-        expect(resolver.resolve(call_site)).to eq(FiberAudit::Context::MIDDLEWARE)
+        expect(resolver.resolve(call_site: call_site)).to eq(FiberAudit::Context::MIDDLEWARE)
+      end
+
+      it 'does NOT resolve config.ru with class method .call to :middleware' do
+        call_site = build_call_site(
+          path: 'config.ru',
+          enclosing_symbol: 'AppBuilder.call',
+          nesting: []
+        )
+        expect(resolver.resolve(call_site: call_site)).to eq(FiberAudit::Context::UNKNOWN)
       end
 
       it 'does NOT resolve config.ru without #call to :middleware' do
@@ -240,7 +271,16 @@ RSpec.describe FiberAudit::Static::ExecutionContextResolver do
           enclosing_symbol: 'AppBuilder#build',
           nesting: []
         )
-        expect(resolver.resolve(call_site)).to eq(FiberAudit::Context::UNKNOWN)
+        expect(resolver.resolve(call_site: call_site)).to eq(FiberAudit::Context::UNKNOWN)
+      end
+
+      it 'does NOT resolve config.ru with #callback (substring false positive) to :middleware' do
+        call_site = build_call_site(
+          path: 'config.ru',
+          enclosing_symbol: 'AppBuilder#callback',
+          nesting: ['AppBuilder']
+        )
+        expect(resolver.resolve(call_site: call_site)).to eq(FiberAudit::Context::UNKNOWN)
       end
     end
 
@@ -258,7 +298,7 @@ RSpec.describe FiberAudit::Static::ExecutionContextResolver do
           nesting: ['User'],
           path: 'app/models/user.rb'
         )
-        expect(resolver.resolve(call_site)).to eq(FiberAudit::Context::CALLBACK)
+        expect(resolver.resolve(call_site: call_site)).to eq(FiberAudit::Context::CALLBACK)
       end
 
       it 'resolves after_ callback with AR ancestry to :callback' do
@@ -267,7 +307,7 @@ RSpec.describe FiberAudit::Static::ExecutionContextResolver do
           nesting: ['User'],
           path: 'app/models/user.rb'
         )
-        expect(resolver.resolve(call_site)).to eq(FiberAudit::Context::CALLBACK)
+        expect(resolver.resolve(call_site: call_site)).to eq(FiberAudit::Context::CALLBACK)
       end
 
       it 'resolves around_ callback with AR ancestry to :callback' do
@@ -276,7 +316,7 @@ RSpec.describe FiberAudit::Static::ExecutionContextResolver do
           nesting: ['User'],
           path: 'app/models/user.rb'
         )
-        expect(resolver.resolve(call_site)).to eq(FiberAudit::Context::CALLBACK)
+        expect(resolver.resolve(call_site: call_site)).to eq(FiberAudit::Context::CALLBACK)
       end
 
       it 'does NOT resolve before_ without model ancestry' do
@@ -287,11 +327,21 @@ RSpec.describe FiberAudit::Static::ExecutionContextResolver do
           nesting: ['ServiceClass'],
           path: 'app/services/service_class.rb'
         )
-        expect(poro_resolver.resolve(call_site)).to eq(FiberAudit::Context::UNKNOWN)
+        expect(poro_resolver.resolve(call_site: call_site)).to eq(FiberAudit::Context::UNKNOWN)
+      end
+
+      it 'does NOT resolve before_ with only ActiveSupport::Concern ancestry' do
+        concern_workspace = MockWorkspace.new('MyModule' => ['ActiveSupport::Concern'])
+        concern_resolver = described_class.new(workspace: concern_workspace)
+        call_site = build_call_site(
+          enclosing_symbol: 'MyModule#before_compile',
+          nesting: ['MyModule']
+        )
+        expect(concern_resolver.resolve(call_site: call_site)).to eq(FiberAudit::Context::UNKNOWN)
       end
     end
 
-    context 'inheritance outranks path' do
+    context 'precedence: inheritance > path > callback' do
       let(:workspace) do
         MockWorkspace.new(
           'TestController' => ['ActionController::Base']
@@ -305,7 +355,7 @@ RSpec.describe FiberAudit::Static::ExecutionContextResolver do
           enclosing_symbol: 'TestController#index',
           nesting: ['TestController']
         )
-        expect(resolver.resolve(call_site)).to eq(FiberAudit::Context::REQUEST)
+        expect(resolver.resolve(call_site: call_site)).to eq(FiberAudit::Context::REQUEST)
       end
     end
 
@@ -319,7 +369,7 @@ RSpec.describe FiberAudit::Static::ExecutionContextResolver do
           enclosing_symbol: 'PlainService#process',
           nesting: ['PlainService']
         )
-        expect(resolver.resolve(call_site)).to eq(FiberAudit::Context::UNKNOWN)
+        expect(resolver.resolve(call_site: call_site)).to eq(FiberAudit::Context::UNKNOWN)
       end
     end
 
@@ -332,13 +382,13 @@ RSpec.describe FiberAudit::Static::ExecutionContextResolver do
           enclosing_symbol: 'User#before_save',
           nesting: ['User']
         )
-        expect(resolver.resolve(call_site)).to eq(FiberAudit::Context::UNKNOWN)
+        expect(resolver.resolve(call_site: call_site)).to eq(FiberAudit::Context::UNKNOWN)
       end
 
       it 'returns :unknown when call_site is malformed' do
         resolver = described_class.new(workspace: MockWorkspace.new)
         malformed = Object.new
-        expect(resolver.resolve(malformed)).to eq(FiberAudit::Context::UNKNOWN)
+        expect(resolver.resolve(call_site: malformed)).to eq(FiberAudit::Context::UNKNOWN)
       end
     end
 
@@ -354,11 +404,23 @@ RSpec.describe FiberAudit::Static::ExecutionContextResolver do
           enclosing_symbol: 'UsersController#index',
           nesting: ['UsersController']
         )
-        expect(resolver.resolve(call_site)).to eq(FiberAudit::Context::REQUEST)
+        expect(resolver.resolve(call_site: call_site)).to eq(FiberAudit::Context::REQUEST)
+      end
+
+      it 'never raises even if semantic_index raises' do
+        broken_index = double('BrokenIndex')
+        allow(broken_index).to receive(:ancestors_of).and_raise(StandardError, 'index error')
+        broken_workspace = MockWorkspaceWithSemanticIndex.new(broken_index)
+        broken_resolver = described_class.new(workspace: broken_workspace)
+        call_site = build_call_site(
+          enclosing_symbol: 'UsersController#index',
+          nesting: ['UsersController']
+        )
+        expect(broken_resolver.resolve(call_site: call_site)).to eq(FiberAudit::Context::UNKNOWN)
       end
     end
 
-    context 'indirect inheritance' do
+    context 'transitive semantic traversal' do
       let(:workspace) do
         MockWorkspace.new(
           'Admin::Base' => ['ApplicationController', 'ActionController::Base'],
@@ -368,13 +430,171 @@ RSpec.describe FiberAudit::Static::ExecutionContextResolver do
       end
       let(:resolver) { described_class.new(workspace: workspace) }
 
-      it 'resolves through multiple inheritance levels' do
+      it 'resolves through multiple inheritance levels transitively' do
         call_site = build_call_site(
           enclosing_symbol: 'Admin::UsersController#index',
           nesting: ['Admin', 'Admin::UsersController'],
           path: 'app/controllers/admin/users_controller.rb'
         )
-        expect(resolver.resolve(call_site)).to eq(FiberAudit::Context::REQUEST)
+        expect(resolver.resolve(call_site: call_site)).to eq(FiberAudit::Context::REQUEST)
+      end
+
+      it 'resolves deeply nested indirect inheritance' do
+        deep_workspace = MockWorkspace.new(
+          'Level1' => ['Level2'],
+          'Level2' => ['Level3'],
+          'Level3' => ['Level4'],
+          'Level4' => ['ActionController::Base']
+        )
+        deep_resolver = described_class.new(workspace: deep_workspace)
+        call_site = build_call_site(
+          enclosing_symbol: 'Level1#action',
+          nesting: ['Level1']
+        )
+        expect(deep_resolver.resolve(call_site: call_site)).to eq(FiberAudit::Context::REQUEST)
+      end
+    end
+
+    context 'cyclic ancestor detection' do
+      it 'handles cyclic ancestors without infinite recursion' do
+        cyclic_workspace = MockWorkspace.new(
+          'ClassA' => ['ClassB'],
+          'ClassB' => ['ClassA']  # cycle: A -> B -> A
+        )
+        cyclic_resolver = described_class.new(workspace: cyclic_workspace)
+        call_site = build_call_site(
+          enclosing_symbol: 'ClassA#method',
+          nesting: ['ClassA']
+        )
+        # Should not hang, returns :unknown since no signal found
+        expect(cyclic_resolver.resolve(call_site: call_site)).to eq(FiberAudit::Context::UNKNOWN)
+      end
+
+      it 'handles self-referencing ancestors' do
+        self_ref_workspace = MockWorkspace.new(
+          'SelfRef' => ['SelfRef']
+        )
+        self_ref_resolver = described_class.new(workspace: self_ref_workspace)
+        call_site = build_call_site(
+          enclosing_symbol: 'SelfRef#method',
+          nesting: ['SelfRef']
+        )
+        expect(self_ref_resolver.resolve(call_site: call_site)).to eq(FiberAudit::Context::UNKNOWN)
+      end
+
+      it 'finds signal through cycle if ancestor is a signal' do
+        cycle_with_signal_workspace = MockWorkspace.new(
+          'ClassX' => ['ClassY', 'ActionController::Base'],
+          'ClassY' => ['ClassX']  # cycle: Y -> X, but X has signal ancestor
+        )
+        cycle_resolver = described_class.new(workspace: cycle_with_signal_workspace)
+        call_site = build_call_site(
+          enclosing_symbol: 'ClassX#action',
+          nesting: ['ClassX']
+        )
+        expect(cycle_resolver.resolve(call_site: call_site)).to eq(FiberAudit::Context::REQUEST)
+      end
+    end
+
+    context 'known class itself as signal' do
+      it 'matches class itself even when ancestors list is empty' do
+        # Class IS ActionController::Base itself - ancestors_of returns []
+        # but the class name itself is a signal
+        empty_ancestors_workspace = MockWorkspace.new(
+          'ActionController::Base' => []
+        )
+        empty_resolver = described_class.new(workspace: empty_ancestors_workspace)
+        call_site = build_call_site(
+          enclosing_symbol: 'ActionController::Base#render',
+          nesting: ['ActionController::Base']
+        )
+        expect(empty_resolver.resolve(call_site: call_site)).to eq(FiberAudit::Context::REQUEST)
+      end
+
+      it 'matches ActiveJob::Base itself with empty ancestors' do
+        empty_workspace = MockWorkspace.new(
+          'ActiveJob::Base' => []
+        )
+        empty_resolver = described_class.new(workspace: empty_workspace)
+        call_site = build_call_site(
+          enclosing_symbol: 'ActiveJob::Base#perform',
+          nesting: ['ActiveJob::Base'],
+          path: 'activejob/base.rb'
+        )
+        expect(empty_resolver.resolve(call_site: call_site)).to eq(FiberAudit::Context::JOB)
+      end
+    end
+
+    context 'noncontiguous path false positives' do
+      let(:workspace) { MockWorkspace.new }
+      let(:resolver) { described_class.new(workspace: workspace) }
+
+      it 'does NOT match non-contiguous config/initializers' do
+        call_site = build_call_site(
+          path: 'app/config/services/initializers_helper.rb',
+          enclosing_symbol: 'InitializersHelper#run',
+          nesting: ['InitializersHelper']
+        )
+        expect(resolver.resolve(call_site: call_site)).to eq(FiberAudit::Context::UNKNOWN)
+      end
+
+      it 'does NOT match non-contiguous lib/tasks' do
+        call_site = build_call_site(
+          path: 'app/lib/services/tasks_runner.rb',
+          enclosing_symbol: 'TasksRunner#run',
+          nesting: ['TasksRunner']
+        )
+        expect(resolver.resolve(call_site: call_site)).to eq(FiberAudit::Context::UNKNOWN)
+      end
+
+      it 'does NOT match non-contiguous app/views' do
+        call_site = build_call_site(
+          path: 'app/services/views_registry.rb',
+          enclosing_symbol: 'ViewsRegistry#register',
+          nesting: ['ViewsRegistry']
+        )
+        expect(resolver.resolve(call_site: call_site)).to eq(FiberAudit::Context::UNKNOWN)
+      end
+    end
+
+    context 'Windows backslash paths' do
+      let(:workspace) { MockWorkspace.new }
+      let(:resolver) { described_class.new(workspace: workspace) }
+
+      it 'resolves config\\initializers to :boot' do
+        call_site = build_call_site(
+          path: 'config\\initializers\\session_store.rb',
+          enclosing_symbol: 'SessionStore#configure',
+          nesting: ['SessionStore']
+        )
+        expect(resolver.resolve(call_site: call_site)).to eq(FiberAudit::Context::BOOT)
+      end
+
+      it 'resolves lib\\tasks to :rake_task' do
+        call_site = build_call_site(
+          path: 'lib\\tasks\\deploy.rake',
+          enclosing_symbol: 'DeployTask#run',
+          nesting: []
+        )
+        expect(resolver.resolve(call_site: call_site)).to eq(FiberAudit::Context::RAKE_TASK)
+      end
+
+      it 'resolves app\\views to :view' do
+        call_site = build_call_site(
+          path: 'app\\views\\users\\index.html.erb',
+          enclosing_symbol: 'UsersView#render',
+          nesting: []
+        )
+        expect(resolver.resolve(call_site: call_site)).to eq(FiberAudit::Context::VIEW)
+      end
+
+      it 'resolves mixed separators to :boot' do
+        call_site = build_call_site(
+          path: 'config/initializers\\session_store.rb',
+          enclosing_symbol: 'SessionStore#configure',
+          nesting: ['SessionStore']
+        )
+        expect(resolver.resolve(call_site: call_site)).to eq(FiberAudit::Context::BOOT)
       end
     end
 
@@ -392,7 +612,7 @@ RSpec.describe FiberAudit::Static::ExecutionContextResolver do
           nesting: ['UserService'],
           path: 'app/models/user_service.rb'
         )
-        expect(resolver.resolve(call_site)).to eq(FiberAudit::Context::CALLBACK)
+        expect(resolver.resolve(call_site: call_site)).to eq(FiberAudit::Context::CALLBACK)
       end
     end
 
@@ -406,7 +626,7 @@ RSpec.describe FiberAudit::Static::ExecutionContextResolver do
           nesting: [],
           path: 'app/services/service.rb'
         )
-        expect(resolver.resolve(call_site)).to eq(FiberAudit::Context::UNKNOWN)
+        expect(resolver.resolve(call_site: call_site)).to eq(FiberAudit::Context::UNKNOWN)
       end
 
       it 'handles empty enclosing_symbol gracefully' do
@@ -415,12 +635,12 @@ RSpec.describe FiberAudit::Static::ExecutionContextResolver do
           nesting: [],
           path: 'app/services/service.rb'
         )
-        expect(resolver.resolve(call_site)).to eq(FiberAudit::Context::UNKNOWN)
+        expect(resolver.resolve(call_site: call_site)).to eq(FiberAudit::Context::UNKNOWN)
       end
     end
   end
 
-  describe '#resolve_all' do
+  describe '#resolve_all(call_sites:)' do
     let(:workspace) do
       MockWorkspace.new(
         'UsersController' => ['ActionController::Base'],
@@ -429,6 +649,19 @@ RSpec.describe FiberAudit::Static::ExecutionContextResolver do
     end
     let(:resolver) { described_class.new(workspace: workspace) }
 
+    context 'keyword-only invocation' do
+      it 'requires call_sites: keyword argument' do
+        call_sites = [build_call_site(enclosing_symbol: 'UsersController#index', nesting: ['UsersController'])]
+        expect(resolver).to respond_to(:resolve_all).with(1).argument
+        expect { resolver.resolve_all(call_sites: call_sites) }.not_to raise_error
+      end
+
+      it 'raises ArgumentError when called without keyword' do
+        call_sites = [build_call_site]
+        expect { resolver.resolve_all(call_sites) }.to raise_error(ArgumentError)
+      end
+    end
+
     it 'returns a new array in original order' do
       call_sites = [
         build_call_site(enclosing_symbol: 'UsersController#index', nesting: ['UsersController']),
@@ -436,7 +669,7 @@ RSpec.describe FiberAudit::Static::ExecutionContextResolver do
         build_call_site(enclosing_symbol: 'PlainService#process', nesting: ['PlainService'])
       ]
 
-      result = resolver.resolve_all(call_sites)
+      result = resolver.resolve_all(call_sites: call_sites)
 
       expect(result).to be_an(Array)
       expect(result).not_to be(call_sites)
@@ -451,7 +684,7 @@ RSpec.describe FiberAudit::Static::ExecutionContextResolver do
         build_call_site(enclosing_symbol: 'UsersController#index', nesting: ['UsersController'])
       ]
 
-      result = resolver.resolve_all(call_sites)
+      result = resolver.resolve_all(call_sites: call_sites)
       original = call_sites.first
       copied = result.first
 
@@ -468,17 +701,17 @@ RSpec.describe FiberAudit::Static::ExecutionContextResolver do
       ]
       original_context = call_sites.first.execution_context
 
-      resolver.resolve_all(call_sites)
+      resolver.resolve_all(call_sites: call_sites)
 
       expect(call_sites.first.execution_context).to eq(original_context)
     end
 
     it 'handles empty array' do
-      expect(resolver.resolve_all([])).to eq([])
+      expect(resolver.resolve_all(call_sites: [])).to eq([])
     end
 
     it 'handles nil gracefully' do
-      expect(resolver.resolve_all(nil)).to eq([])
+      expect(resolver.resolve_all(call_sites: nil)).to eq([])
     end
 
     it 'returns :unknown for all when workspace raises' do
@@ -490,8 +723,42 @@ RSpec.describe FiberAudit::Static::ExecutionContextResolver do
         build_call_site(enclosing_symbol: 'User#before_save', nesting: ['User'])
       ]
 
-      result = error_resolver.resolve_all(call_sites)
+      result = error_resolver.resolve_all(call_sites: call_sites)
       expect(result.first.execution_context).to eq(FiberAudit::Context::UNKNOWN)
+    end
+
+    context 'actual merged FiberAudit::Static::CallSite copying' do
+      it 'copies real FiberAudit::Static::CallSite objects' do
+        # Use the actual CallSite Data type if available
+        call_site = FiberAudit::Static::CallSite.new(
+          path: 'app/controllers/users_controller.rb',
+          line: 10,
+          column: 4,
+          receiver_source: 'Open3',
+          receiver_constant: 'Open3',
+          method_name: :capture3,
+          arguments: ['cmd'],
+          enclosing_symbol: 'UsersController#index',
+          nesting: ['UsersController'],
+          execution_context: nil,
+          resolution: 'Open3.capture3',
+          confidence: :high
+        )
+
+        result = resolver.resolve_all(call_sites: [call_site])
+
+        expect(result.size).to eq(1)
+        copied = result.first
+        expect(copied).not_to be(call_site)
+        expect(copied).to be_a(FiberAudit::Static::CallSite)
+        expect(copied.execution_context).to eq(FiberAudit::Context::REQUEST)
+        expect(copied.path).to eq(call_site.path)
+        expect(copied.line).to eq(call_site.line)
+        expect(copied.method_name).to eq(call_site.method_name)
+        expect(copied.receiver_source).to eq(call_site.receiver_source)
+        # Original unchanged
+        expect(call_site.execution_context).to be_nil
+      end
     end
   end
 
