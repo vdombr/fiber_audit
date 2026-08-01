@@ -17,4 +17,9 @@ class ConstructorChain
     # Direct constructor chains: Mutex.new.synchronize
     Mutex.new.synchronize { 'critical' }
   end
+
+  def current_thread_assignment
+    current_thread = Thread.current
+    current_thread.thread_variable_get(:request_id)
+  end
 end

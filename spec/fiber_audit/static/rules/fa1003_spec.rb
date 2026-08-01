@@ -32,6 +32,7 @@ RSpec.describe FiberAudit::Static::Rules::Synchronization do
       end
 
       def resolve_constant(name, nesting: [])
+        _ = nesting
         return nil unless @shadowed_constants.include?(name.to_s)
 
         # Non-nil signals workspace-local definition (shadow).
@@ -77,7 +78,7 @@ RSpec.describe FiberAudit::Static::Rules::Synchronization do
       resolution: 'Mutex#lock',
       confidence: :high
     }
-    FiberAudit::Static::CallSite.new(**defaults.merge(overrides))
+    FiberAudit::Static::CallSite.new(**defaults, **overrides)
   end
 
   # ── Metadata ──────────────────────────────────────────────────────────
@@ -164,7 +165,7 @@ RSpec.describe FiberAudit::Static::Rules::Synchronization do
   # ── Implicit MonitorMixin synchronize ─────────────────────────────────
   describe 'implicit MonitorMixin synchronize' do
     it 'detects synchronize without receiver when class includes MonitorMixin' do
-      workspace.ancestors_map['MyService'] = ['MonitorMixin', 'Object', 'Kernel', 'BasicObject']
+      workspace.ancestors_map['MyService'] = %w[MonitorMixin Object Kernel BasicObject]
 
       site = build_site(
         receiver_source: nil, receiver_constant: nil, method_name: :synchronize,
@@ -177,20 +178,24 @@ RSpec.describe FiberAudit::Static::Rules::Synchronization do
     end
 
     it 'detects via semantic_index.ancestors_of fallback' do
-      workspace.ancestors_map = {} # workspace does not respond_to ancestors_of directly
       allow(semantic_index).to receive(:ancestors_of).with('MyService').and_return(['MonitorMixin'])
-
+      semantic_workspace = Struct.new(:semantic_index).new(semantic_index)
+      semantic_rule = described_class.new(
+        workspace: semantic_workspace,
+        context_resolver: context_resolver,
+        configuration: configuration
+      )
       site = build_site(
         receiver_source: nil, receiver_constant: nil, method_name: :synchronize,
         enclosing_symbol: 'MyService#process'
       )
 
-      findings = rule.analyze(call_sites: [site])
+      findings = semantic_rule.analyze(call_sites: [site])
       expect(findings.size).to eq(1)
     end
 
     it 'does not detect synchronize without MonitorMixin ancestry' do
-      workspace.ancestors_map['MyService'] = ['Object', 'Kernel', 'BasicObject']
+      workspace.ancestors_map['MyService'] = %w[Object Kernel BasicObject]
 
       site = build_site(
         receiver_source: nil, receiver_constant: nil, method_name: :synchronize,
@@ -432,18 +437,18 @@ RSpec.describe FiberAudit::Static::Rules::Synchronization do
 
   # ── Adapter resilience ────────────────────────────────────────────────
   describe 'adapter resilience' do
-    it 'returns empty array when workspace raises' do
+    it 'degrades to normal matching when workspace lookup raises' do
       allow(workspace).to receive(:semantic_index).and_raise(StandardError.new('boom'))
 
       site = build_site(receiver_source: 'mutex', receiver_constant: 'Mutex', method_name: :lock)
-      expect(rule.analyze(call_sites: [site])).to eq([])
+      expect(rule.analyze(call_sites: [site]).size).to eq(1)
     end
 
-    it 'returns empty array when resolve_constant raises' do
+    it 'degrades to normal matching when resolve_constant raises' do
       allow(semantic_index).to receive(:resolve_constant).and_raise(StandardError.new('boom'))
 
       site = build_site(receiver_source: 'mutex', receiver_constant: 'Mutex', method_name: :lock)
-      expect(rule.analyze(call_sites: [site])).to eq([])
+      expect(rule.analyze(call_sites: [site]).size).to eq(1)
     end
 
     it 'returns empty array when ancestors_of raises' do

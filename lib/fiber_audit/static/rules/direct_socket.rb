@@ -1,8 +1,9 @@
 # frozen_string_literal: true
 
 require_relative 'base'
-require_relative '../../findings/finding'
 require_relative '../../findings/evidence'
+require_relative '../../correlation/fingerprint'
+require_relative '../../findings/finding'
 
 module FiberAudit
   module Static
@@ -20,7 +21,7 @@ module FiberAudit
 
         EXACT = %w[
           TCPSocket TCPServer UDPSocket UNIXSocket UNIXServer Socket IPSocket
-        ].to_set.freeze
+        ].freeze
 
         MESSAGE = 'Direct socket use may bypass scheduler-aware networking ' \
                   'and block the scheduler thread.'
@@ -28,31 +29,31 @@ module FiberAudit
                       'socket operations cooperate with the active Fiber scheduler.'
 
         class << self
-          def title;    TITLE;    end
-          def category; CATEGORY; end
+          def title = TITLE
+          def category = CATEGORY
         end
 
         def analyze(call_sites:)
-          call_sites.filter_map { |cs| match(cs) }
+          call_sites.filter_map { |site| match(site) }
         end
 
         private
 
-        def match(cs)
-          return unless cs.method_name == :new
+        def match(site)
+          return unless site.method_name == :new
 
-          const = cs.receiver_constant
+          const = site.receiver_constant
           return unless const
 
           if EXACT.include?(const)
-            return if shadowed?(const, cs.nesting)
+            return if shadowed?(const, site.nesting)
 
-            return build_finding(cs, const)
+            return build_finding(site, const)
           end
 
           return unless ip_socket_subclass?(const)
 
-          build_finding(cs, const)
+          build_finding(site, const)
         end
 
         def shadowed?(name, nesting)
@@ -74,25 +75,24 @@ module FiberAudit
         end
 
         def semantic_index
-          return workspace if workspace.respond_to?(:ancestors_of)
-
-          workspace.semantic_index if workspace.respond_to?(:semantic_index)
+          index = workspace.semantic_index if workspace.respond_to?(:semantic_index)
+          index || workspace
         rescue StandardError
           nil
         end
 
-        def build_finding(cs, const)
+        def build_finding(site, const)
           operation = "#{const}.new"
-          ctx = cs.execution_context || :unknown
+          ctx = site.execution_context || :unknown
 
           Finding.new(
             rule_id: self.class.id,
             title: self.class.title,
             category: self.class.category,
             severity: severity_for(:medium, ctx),
-            confidence: cs.confidence,
-            location: cs.location,
-            symbol: cs.enclosing_symbol,
+            confidence: site.confidence,
+            location: site.location,
+            symbol: site.enclosing_symbol,
             operation: operation,
             execution_context: ctx,
             message: MESSAGE,

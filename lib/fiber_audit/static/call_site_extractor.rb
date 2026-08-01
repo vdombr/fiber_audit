@@ -275,10 +275,15 @@ module FiberAudit
         end
 
         def compute_call_assignment_info(call_node)
+          receiver_const = extract_constant_from_node(call_node.receiver)
+          resolved = resolve_constant_name(receiver_const)
+
+          # Thread.current returns the current Thread instance. Keep this narrow:
+          # arbitrary singleton methods do not imply their receiver's type.
+          return { constant: resolved, confidence: :high } if call_node.name == :current && resolved == 'Thread'
+
           if call_node.name == :new && call_node.receiver
             # Constructor call: `x = SomeConst.new(...)`
-            receiver_const = extract_constant_from_node(call_node.receiver)
-            resolved = resolve_constant_name(receiver_const)
             if resolved
               { constant: resolved, confidence: :high }
             else
@@ -387,10 +392,14 @@ module FiberAudit
         def semantic_receiver_constant(receiver_source)
           return unless @semantic_index
 
-          @semantic_index.resolve_constant(
-            receiver_source,
-            nesting: @nesting_stack.dup
-          )&.name
+          @nesting_stack.length.downto(0) do |length|
+            resolved = @semantic_index.resolve_constant(
+              receiver_source,
+              nesting: @nesting_stack.first(length)
+            )
+            return resolved.name if resolved
+          end
+          nil
         rescue StandardError
           nil
         end

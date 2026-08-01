@@ -1,8 +1,9 @@
 # frozen_string_literal: true
 
 require_relative 'base'
-require_relative '../../findings/finding'
 require_relative '../../findings/evidence'
+require_relative '../../correlation/fingerprint'
+require_relative '../../findings/finding'
 
 module FiberAudit
   module Static
@@ -14,9 +15,9 @@ module FiberAudit
         description 'Blocking subprocess call in the fiber scheduler path'
 
         TARGETS = {
-          'Kernel'  => %i[system exec spawn].freeze,
-          'Open3'   => %i[capture2 capture2e capture3 pipeline].freeze,
-          'IO'      => %i[popen].freeze,
+          'Kernel' => %i[system exec spawn].freeze,
+          'Open3' => %i[capture2 capture2e capture3 pipeline].freeze,
+          'IO' => %i[popen].freeze,
           'Process' => %i[waitall detach].freeze
         }.freeze
 
@@ -26,35 +27,34 @@ module FiberAudit
         REMEDIATION = 'Move long-running subprocess work outside the request path, or verify scheduler behaviour under load.'
 
         def analyze(call_sites:)
-          call_sites.filter_map do |cs|
-            next unless (match = match_call_site(cs))
+          call_sites.filter_map do |site|
+            next unless (match = match_call_site(site))
 
-            build_finding(cs, match)
+            build_finding(site, match)
           end
         end
 
         private
 
-        def match_call_site(cs)
-          receiver = cs.receiver_constant
-          method = cs.method_name
+        def match_call_site(site)
+          receiver = site.receiver_constant
+          method = site.method_name
 
-          if receiver.nil? && BARE_KERNEL_METHODS.include?(method)
+          if receiver.nil? && site.receiver_source.nil? && BARE_KERNEL_METHODS.include?(method)
             return { constant: 'Kernel', method: method, confidence: :unknown }
           end
 
           return nil unless receiver && TARGETS.key?(receiver)
           return nil unless TARGETS[receiver].include?(method)
-          return nil if shadowed?(receiver, cs.nesting)
+          return nil if shadowed?(receiver, site.nesting)
 
-          { constant: receiver, method: method, confidence: cs.confidence }
+          { constant: receiver, method: method, confidence: site.confidence }
         end
 
         def shadowed?(constant_name, nesting)
-          return false unless workspace.respond_to?(:semantic_index)
-
-          sem = workspace.semantic_index
-          return false unless sem
+          sem = workspace.semantic_index if workspace.respond_to?(:semantic_index)
+          sem ||= workspace if workspace.respond_to?(:resolve_constant)
+          return false unless sem.respond_to?(:resolve_constant)
 
           resolved = sem.resolve_constant(constant_name, nesting: nesting || [])
           !resolved.nil?
@@ -62,9 +62,9 @@ module FiberAudit
           false
         end
 
-        def build_finding(cs, match)
+        def build_finding(site, match)
           operation = "#{match[:constant]}.#{match[:method]}"
-          context = cs.execution_context || :unknown
+          context = site.execution_context || :unknown
           sev = severity_for(self.class.severity, context)
 
           Finding.new(
@@ -73,8 +73,8 @@ module FiberAudit
             category: :subprocess,
             severity: sev,
             confidence: match[:confidence],
-            location: cs.location,
-            symbol: cs.enclosing_symbol,
+            location: site.location,
+            symbol: site.enclosing_symbol,
             operation: operation,
             execution_context: context,
             message: MESSAGE,

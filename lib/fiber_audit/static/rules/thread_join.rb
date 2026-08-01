@@ -1,8 +1,8 @@
 # frozen_string_literal: true
 
 require_relative 'base'
-require_relative '../../findings/location'
 require_relative '../../findings/evidence'
+require_relative '../../correlation/fingerprint'
 require_relative '../../findings/finding'
 
 module FiberAudit
@@ -32,67 +32,59 @@ module FiberAudit
                       'or move the work outside the fiber-scheduled path.'
         TARGET_METHODS  = %i[join value].freeze
         CANONICAL_OPS   = %w[Thread.join Thread.value].freeze
-        SKIP_SOURCES    = %w[Thread worker].freeze
+        DIRECT_CLASS_SOURCE = 'Thread'
 
         def analyze(call_sites:)
-          call_sites.filter_map { |cs| match(cs) }
+          call_sites.filter_map { |site| match(site) }
         end
 
         private
 
-        def match(cs)
-          return unless TARGET_METHODS.include?(cs.method_name)
-          return unless thread_instance?(cs)
-          return if shadowed_thread?(cs)
+        def match(site)
+          return unless TARGET_METHODS.include?(site.method_name)
+          return unless thread_instance?(site)
+          return if shadowed_thread?(site)
 
-          build_finding(cs)
+          build_finding(site)
         end
 
         # Receiver must resolve to Thread but not be the bare literal.
-        def thread_instance?(cs)
-          !SKIP_SOURCES.include?(cs.receiver_source) &&
-            cs.receiver_constant == 'Thread'
+        def thread_instance?(site)
+          return true if site.receiver_source == 'Thread.current'
+
+          site.receiver_constant == 'Thread' && site.receiver_source != DIRECT_CLASS_SOURCE
         rescue StandardError
           false
         end
 
         # Check workspace / semantic_index resolve_constant seam.
         # Adapter errors are swallowed.
-        def shadowed_thread?(cs)
-          return false unless workspace
+        def shadowed_thread?(site)
+          index = workspace.semantic_index if workspace.respond_to?(:semantic_index)
+          index ||= workspace if workspace.respond_to?(:resolve_constant)
+          return false unless index.respond_to?(:resolve_constant)
 
-          if workspace.respond_to?(:resolve_constant)
-            r = workspace.resolve_constant('Thread')
-            return true if r && r != 'Thread'
-          end
-
-          return false unless workspace.respond_to?(:semantic_index)
-
-          idx = workspace.semantic_index
-          return false unless idx&.respond_to?(:resolve_constant)
-
-          r = idx.resolve_constant('Thread')
-          r && r != 'Thread'
+          !index.resolve_constant('Thread', nesting: site.nesting || []).nil?
         rescue StandardError
           false
         end
 
-        def build_finding(cs)
-          loc  = Location.new(path: cs.path, line: cs.line, column: cs.column)
-          op   = "Thread.#{cs.method_name}"
-          sev  = severity_for(self.class.severity, cs.execution_context)
-          conf = cs.receiver_source == 'Thread.current' ? :high : self.class.confidence
+        def build_finding(site)
+          loc  = site.location
+          op   = "Thread.#{site.method_name}"
+          sev  = severity_for(self.class.severity, site.execution_context)
+          conf = site.receiver_source == 'Thread.current' ? :high : site.confidence
 
           Finding.new(
             rule_id: self.class.id, title: TITLE, category: CATEGORY,
             severity: sev, confidence: conf, location: loc,
-            symbol: cs.enclosing_symbol, operation: op,
-            execution_context: cs.execution_context,
+            symbol: site.enclosing_symbol, operation: op,
+            execution_context: site.execution_context,
             message: MESSAGE,
             evidence: [Evidence.new(
               source: 'static_analysis',
-              message: "#{op} on #{cs.receiver_source}",
-              details: { operation: op, receiver: cs.receiver_source,
+              message: "#{op} on #{site.receiver_source}",
+              details: { operation: op, receiver: site.receiver_source,
                          canonical_operations: CANONICAL_OPS }
             )],
             remediation: REMEDIATION

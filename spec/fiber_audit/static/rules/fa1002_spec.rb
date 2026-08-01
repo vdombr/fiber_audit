@@ -163,8 +163,8 @@ RSpec.describe FiberAudit::Static::Rules::ThreadJoin do
         expect(findings).to be_empty
       end
 
-      it 'detects when workspace.resolve_constant returns Thread' do
-        normal_workspace = double('workspace', resolve_constant: 'Thread', semantic_index: nil)
+      it 'detects when workspace has no Thread declaration' do
+        normal_workspace = double('workspace', resolve_constant: nil, semantic_index: nil)
         rule_normal = described_class.new(
           workspace: normal_workspace,
           context_resolver: context_resolver,
@@ -253,7 +253,7 @@ RSpec.describe FiberAudit::Static::Rules::ThreadJoin do
     end
 
     context 'confidence' do
-      it 'uses default_confidence :high for Thread.new.join' do
+      it 'preserves call-site confidence for Thread.new.join' do
         cs = build_call_site(
           receiver_source: 'Thread.new',
           receiver_constant: 'Thread',
@@ -261,10 +261,10 @@ RSpec.describe FiberAudit::Static::Rules::ThreadJoin do
           confidence: :medium
         )
         findings = rule.analyze(call_sites: [cs])
-        expect(findings.first.confidence).to eq(:high)
+        expect(findings.first.confidence).to eq(:medium)
       end
 
-      it 'uses default_confidence :high for assigned receiver' do
+      it 'preserves call-site confidence for an assigned receiver' do
         cs = build_call_site(
           receiver_source: 't',
           receiver_constant: 'Thread',
@@ -272,7 +272,7 @@ RSpec.describe FiberAudit::Static::Rules::ThreadJoin do
           confidence: :low
         )
         findings = rule.analyze(call_sites: [cs])
-        expect(findings.first.confidence).to eq(:high)
+        expect(findings.first.confidence).to eq(:low)
       end
 
       it 'forces :high confidence for Thread.current' do
@@ -308,7 +308,10 @@ RSpec.describe FiberAudit::Static::Rules::ThreadJoin do
         expect(finding.message).to eq('Waiting for a thread may block the thread running the fiber scheduler.')
         expect(finding.evidence).to be_an(Array)
         expect(finding.evidence).not_to be_empty
-        expect(finding.remediation).to eq('Replace thread waits with scheduler-aware coordination, or move the work outside the fiber-scheduled path.')
+        expect(finding.remediation).to eq(
+          'Replace thread waits with scheduler-aware coordination, ' \
+          'or move the work outside the fiber-scheduled path.'
+        )
       end
 
       it 'provides nonempty static evidence' do
@@ -343,7 +346,7 @@ RSpec.describe FiberAudit::Static::Rules::ThreadJoin do
         expect(finding1.fingerprint.length).to eq(64) # SHA256 hex digest
       end
 
-      it 'generates different fingerprints for different call sites' do
+      it 'keeps fingerprints stable when only the line changes' do
         cs1 = build_call_site(
           receiver_source: 'Thread.new',
           receiver_constant: 'Thread',
@@ -359,7 +362,7 @@ RSpec.describe FiberAudit::Static::Rules::ThreadJoin do
         finding1 = rule.analyze(call_sites: [cs1]).first
         finding2 = rule.analyze(call_sites: [cs2]).first
 
-        expect(finding1.fingerprint).not_to eq(finding2.fingerprint)
+        expect(finding1.fingerprint).to eq(finding2.fingerprint)
       end
     end
 

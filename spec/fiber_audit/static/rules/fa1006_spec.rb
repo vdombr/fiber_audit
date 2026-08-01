@@ -19,7 +19,7 @@ RSpec.describe FiberAudit::Static::Rules::DirectSocket do
       resolution: 'TCPSocket.new',
       confidence: :high
     }
-    FiberAudit::Static::CallSite.new(**defaults.merge(overrides))
+    FiberAudit::Static::CallSite.new(**defaults, **overrides)
   end
 
   let(:semantic_index) { double('semantic_index') }
@@ -312,14 +312,14 @@ RSpec.describe FiberAudit::Static::Rules::DirectSocket do
         expect(findings1.first.fingerprint).to eq(findings2.first.fingerprint)
       end
 
-      it 'generates different fingerprints for different locations' do
+      it 'keeps fingerprints stable when only the line changes' do
         cs1 = build_call_site(path: 'test.rb', line: 1)
         cs2 = build_call_site(path: 'test.rb', line: 2)
 
         findings1 = rule.analyze(call_sites: [cs1])
         findings2 = rule.analyze(call_sites: [cs2])
 
-        expect(findings1.first.fingerprint).not_to eq(findings2.first.fingerprint)
+        expect(findings1.first.fingerprint).to eq(findings2.first.fingerprint)
       end
     end
   end

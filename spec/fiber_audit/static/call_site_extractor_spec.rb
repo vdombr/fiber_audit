@@ -199,6 +199,14 @@ RSpec.describe FiberAudit::Static::CallSiteExtractor do
         expect(direct_sync.receiver_constant).to eq('Mutex')
         expect(direct_sync.confidence).to eq(:high)
       end
+
+      it 'propagates Thread from a Thread.current assignment' do
+        access = result.call_sites.find { |cs| cs.method_name == :thread_variable_get }
+
+        expect(access.receiver_source).to eq('current_thread')
+        expect(access.receiver_constant).to eq('Thread')
+        expect(access.confidence).to eq(:high)
+      end
     end
 
     context 'with malformed fixture' do

@@ -272,7 +272,10 @@ RSpec.describe FiberAudit::Static::Rules::BlockingSubprocess do
       end
 
       it 'has correct remediation' do
-        expect(finding.remediation).to eq('Move long-running subprocess work outside the request path, or verify scheduler behaviour under load.')
+        expect(finding.remediation).to eq(
+          'Move long-running subprocess work outside the request path, ' \
+          'or verify scheduler behaviour under load.'
+        )
       end
 
       it 'has non-empty evidence' do

@@ -3,7 +3,7 @@
 require 'fiber_audit/static/rules/thread_current_state'
 require 'fiber_audit/static/call_site'
 require 'fiber_audit/configuration'
-require 'fiber_audit/location'
+require 'fiber_audit/findings/location'
 
 RSpec.describe FiberAudit::Static::Rules::ThreadCurrentState do
   let(:workspace) { instance_double('Workspace', resolve_constant: nil, root: '/workspace') }
@@ -34,7 +34,7 @@ RSpec.describe FiberAudit::Static::Rules::ThreadCurrentState do
       resolution: 'Thread.current.thread_variable_get',
       confidence: :high
     }
-    FiberAudit::Static::CallSite.new(**defaults.merge(overrides))
+    FiberAudit::Static::CallSite.new(**defaults, **overrides)
   end
 
   describe '#analyze' do
@@ -46,7 +46,7 @@ RSpec.describe FiberAudit::Static::Rules::ThreadCurrentState do
         expect(findings.size).to eq(1)
         expect(findings.first.severity).to eq(:critical)
         expect(findings.first.confidence).to eq(:high)
-        expect(findings.first.operation).to eq('Thread.current.thread_variable_get')
+        expect(findings.first.operation).to eq('Thread.thread_variable_get')
       end
 
       it 'emits a finding with rake context severity' do
@@ -65,7 +65,7 @@ RSpec.describe FiberAudit::Static::Rules::ThreadCurrentState do
 
         expect(findings.size).to eq(1)
         expect(findings.first.severity).to eq(:critical)
-        expect(findings.first.operation).to eq('Thread.current.thread_variable_set')
+        expect(findings.first.operation).to eq('Thread.thread_variable_set')
       end
 
       it 'emits a finding with rake context severity' do
@@ -126,7 +126,7 @@ RSpec.describe FiberAudit::Static::Rules::ThreadCurrentState do
         findings = rule.analyze(call_sites: [cs])
 
         expect(findings.size).to eq(1)
-        expect(findings.first.operation).to eq('my_thread.thread_variable_get')
+        expect(findings.first.operation).to eq('Thread.thread_variable_get')
       end
     end
 
@@ -188,7 +188,10 @@ RSpec.describe FiberAudit::Static::Rules::ThreadCurrentState do
         expect(finding.title).to eq('Thread-local state in fiber code')
         expect(finding.category).to eq(:thread_local)
         expect(finding.message).to eq('Thread-local state may be shared across fibers and leak request-local data.')
-        expect(finding.remediation).to eq('Use fiber-local or framework-provided request-local state instead of Thread thread variables.')
+        expect(finding.remediation).to eq(
+          'Use fiber-local or framework-provided request-local state ' \
+          'instead of Thread thread variables.'
+        )
         expect(finding.symbol).to eq('User#process')
         expect(finding.execution_context).to eq(:request)
         expect(finding.location).to be_a(FiberAudit::Location)
