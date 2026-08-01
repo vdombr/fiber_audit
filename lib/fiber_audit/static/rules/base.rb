@@ -61,10 +61,12 @@ module FiberAudit
 
           # Get or set the default severity.
           # When setting, validates via Severity.coerce.
+          # Accepts Symbol or String values; Strings are normalized to Symbols.
           def severity(value = nil)
             return @default_severity unless value
 
-            @default_severity = Severity.coerce(value)
+            normalized = value.is_a?(String) ? value.to_sym : value
+            @default_severity = Severity.coerce(normalized)
           end
 
           # Alias: getter for the default severity.
@@ -77,10 +79,12 @@ module FiberAudit
 
           # Get or set the default confidence.
           # When setting, validates via Confidence.coerce.
+          # Accepts Symbol or String values; Strings are normalized to Symbols.
           def confidence(value = nil)
             return @default_confidence unless value
 
-            @default_confidence = Confidence.coerce(value)
+            normalized = value.is_a?(String) ? value.to_sym : value
+            @default_confidence = Confidence.coerce(normalized)
           end
 
           # Alias: getter for the default confidence.
@@ -140,10 +144,13 @@ module FiberAudit
         #   1. configuration.severity_override(rule_id) replaces the default
         #   2. Context ceiling monotonically raises (never lowers)
         #
-        # @param default_sev [Symbol] rule's default severity
+        # @param default_sev [Symbol, String] rule's default severity
         # @param context [Symbol, nil] execution context (nil → :unknown)
         # @return [Symbol] the resolved severity
         def severity_for(default_sev, context)
+          # Normalize String to Symbol defensively
+          default_sev = default_sev.to_sym if default_sev.is_a?(String)
+
           # Step 1: configuration override (replaces default entirely)
           base = configuration.severity_override(self.class.id) || default_sev
 

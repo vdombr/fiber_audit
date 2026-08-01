@@ -57,9 +57,13 @@ RSpec.describe FiberAudit::Static::Rules::Base do
 
     it 'coerces severity on set' do
       klass = Class.new(described_class) { severity 'medium' }
-      # String coercion: Severity.coerce(:medium) works; "medium".to_sym is not called
-      # Severity.coerce only accepts symbols in LEVELS
-      # "medium" is not in LEVELS, so this should raise
+      expect(klass.severity).to eq(:medium)
+    end
+
+    it 'normalizes String severity to Symbol before coercion' do
+      klass = Class.new(described_class) { severity 'high' }
+      expect(klass.severity).to eq(:high)
+      expect(klass.severity).to be_a(Symbol)
     end
 
     it 'raises ArgumentError for invalid severity' do
@@ -80,6 +84,17 @@ RSpec.describe FiberAudit::Static::Rules::Base do
       expect {
         Class.new(described_class) { confidence :definite }
       }.to raise_error(ArgumentError, /unknown confidence/)
+    end
+
+    it 'coerces confidence on set' do
+      klass = Class.new(described_class) { confidence 'medium' }
+      expect(klass.confidence).to eq(:medium)
+    end
+
+    it 'normalizes String confidence to Symbol before coercion' do
+      klass = Class.new(described_class) { confidence 'high' }
+      expect(klass.confidence).to eq(:high)
+      expect(klass.confidence).to be_a(Symbol)
     end
 
     it 'sets and returns the description' do
