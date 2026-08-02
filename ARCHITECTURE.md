@@ -62,8 +62,8 @@ When documents disagree, use this precedence:
 5. `fiber_audit_v0.1.0_implementation_findings.md` is a review snapshot, not a
    substitute for current code.
 
-The corrected platform target is Ruby `>= 3.3` with CI configured for Ruby 3.3,
-3.4, and 3.5. Ruby 3.2 is excluded because it is end-of-life.
+The corrected platform target is Ruby `>= 3.3` with CI configured for Ruby 3.3
+and 3.4. Ruby 3.2 is excluded because it is end-of-life.
 
 ## 4. Architectural Principles
 
@@ -597,9 +597,8 @@ spec/fixtures/apps/rails_contexts
 spec/fixtures/reports/rails_blockers_v0.1.json
 ```
 
-CI is configured to run linting, specs, and gem packaging on Ruby 3.3, 3.4,
-and 3.5. The workflow configuration does not itself prove that remote CI has
-passed.
+CI is configured to run linting, specs, and gem packaging on Ruby 3.3 and 3.4.
+The workflow configuration does not itself prove that remote CI has passed.
 
 ## 13. Runtime Architecture Beyond v0.1.0
 
