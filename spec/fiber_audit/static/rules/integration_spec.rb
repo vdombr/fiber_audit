@@ -7,9 +7,9 @@ RSpec.describe 'Wave R3 rule integration' do
   rule_cases = {
     'FA1001' => [FiberAudit::Static::Rules::BlockingSubprocess, 13],
     'FA1002' => [FiberAudit::Static::Rules::ThreadJoin, 9],
-    'FA1003' => [FiberAudit::Static::Rules::Synchronization, 8],
+    'FA1003' => [FiberAudit::Static::Rules::Synchronization, 9],
     'FA1004' => [FiberAudit::Static::Rules::ThreadCurrentState, 6],
-    'FA1005' => [FiberAudit::Static::Rules::IOSelect, 3],
+    'FA1005' => [FiberAudit::Static::Rules::IOSelect, 4],
     'FA1006' => [FiberAudit::Static::Rules::DirectSocket, 7],
     'FA1007' => [FiberAudit::Static::Rules::NetHTTPInRequest, 10]
   }.freeze

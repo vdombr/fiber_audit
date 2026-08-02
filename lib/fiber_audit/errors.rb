@@ -4,4 +4,5 @@ module FiberAudit
   class ConfigurationError < StandardError; end
   class EmptyEvidenceError < StandardError; end
   class ReporterError < StandardError; end
+  class ProjectError < StandardError; end
 end

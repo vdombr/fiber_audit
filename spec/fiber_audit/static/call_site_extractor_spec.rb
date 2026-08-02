@@ -207,6 +207,13 @@ RSpec.describe FiberAudit::Static::CallSiteExtractor do
         expect(access.receiver_constant).to eq('Thread')
         expect(access.confidence).to eq(:high)
       end
+
+      it 'extracts calls from attached block bodies' do
+        select_call = result.call_sites.find { |cs| cs.method_name == :select }
+
+        expect(select_call.receiver_constant).to eq('IO')
+        expect(select_call.enclosing_symbol).to eq('ConstructorChain#attached_block_body')
+      end
     end
 
     context 'with malformed fixture' do

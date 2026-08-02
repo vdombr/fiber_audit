@@ -19,11 +19,10 @@ FiberAudit does **not** prove that an application is fiber-safe. Static analysis
 produces hypotheses; future runtime analysis may confirm scheduler starvation.
 A static-only result must never claim an unconditional `PASS`.
 
-> **Repository status:** the current repository implements foundation objects,
-> configuration and suppression utilities, and preliminary semantic/syntax
-> indexes. The end-to-end v0.1.0 static audit pipeline is planned but not yet
-> implemented. In particular, `fiber-audit static`, rules, execution-context
-> resolution, reporters, and the audit coordinator are incomplete or absent.
+> **Repository status:** the v0.1.0 static pipeline is implemented end to end:
+> project discovery, configuration, semantic and syntax analysis, execution
+> contexts, FA1001–FA1007, suppressions, status derivation, text/JSON reports,
+> and the CLI. Runtime analysis remains future work.
 
 ## 2. Scope
 
@@ -136,55 +135,41 @@ are inferred from source structure, inheritance, paths, and callbacks.
 
 ## 6. Current Repository Architecture
 
-The implementation is presently a set of disconnected foundations:
-
 ```text
-require "fiber_audit"
-        |
-        +-- Findings and value objects
-        +-- Fingerprint generation
-        +-- Configuration
-        +-- Inline/YAML suppression utilities
-        +-- Rubydex SemanticIndex       (partial)
-        +-- Prism SourceIndex           (placeholder)
-        +-- CLI dispatcher              (partial)
-
 fiber-audit static
         |
-        +-- prints "Static analysis not yet implemented"
-        +-- exits 2
+        +-- Project + Configuration
+        +-- SemanticIndex + CallSiteExtractor
+        +-- ExecutionContextResolver
+        +-- Built-in registry (FA1001–FA1007)
+        +-- Findings + Suppression Store
+        +-- Audit::Result
+        +-- Text or JSON reporter
+        +-- Exit code 0, 1, or 2
 ```
 
 ### Current component status
 
 | Component | Responsibility | Status |
 |---|---|---|
-| Gem packaging | Ruby requirement, executable, runtime dependencies | Implemented |
-| Main loader | Loads the current public surface | Implemented |
-| CLI | Help/version dispatch | Partial; analysis commands are placeholders |
-| Findings model | Shared result value objects | Implemented foundation |
-| Fingerprint | Stable finding identity | Implemented |
-| Configuration | Static globs, rules, formats, severity threshold | Partial validation |
-| Suppression parser | Inline and YAML suppression definitions | Partial |
-| Suppression store | Partition active and suppressed findings | Implemented foundation |
-| `SemanticIndex` | Rubydex adapter | Partial; R1 repairs remain |
-| `SourceIndex` | Preliminary Prism call traversal | Placeholder |
-| Call-site extractor | FiberAudit-owned `CallSite` values and inference | Planned |
-| Context resolver | Rails/request/job/etc. classification | Planned |
-| Rule system | Rule base, registry, FA1001–FA1007 | Planned |
-| Audit coordinator | End-to-end orchestration and status | Planned |
-| Reporters | Text and JSON schema output | Planned |
-| Project discovery | Root/config resolution | Planned |
+| Gem packaging and loader | Ruby baseline, executable, public surface | Implemented |
+| CLI and project discovery | Commands, root/config resolution, exit codes | Implemented |
+| Findings and fingerprints | Evidence-bearing values and stable identity | Implemented |
+| Configuration and suppressions | Validation and post-analysis filtering | Implemented |
+| `SemanticIndex` | Rubydex adapter | Implemented |
+| `CallSiteExtractor` | Prism traversal and conservative inference | Implemented |
+| Context resolver | Rails/request/job/etc. classification | Implemented |
+| Rule system | Registry and FA1001–FA1007 | Implemented |
+| Audit coordinator | End-to-end orchestration and status | Implemented |
+| Reporters | Text and JSON schema 1.0 | Implemented |
 | Runtime engine | Runtime observation and confirmation | Future |
 
-The current loader is `lib/fiber_audit.rb`. The implementation should move a
-component from “planned” to “implemented” only when its source and meaningful
-spec coverage both exist.
+The public loader is `lib/fiber_audit.rb`.
 
-## 7. Planned v0.1.0 Static Pipeline
+## 7. v0.1.0 Static Pipeline
 
-All components in this diagram after configuration/index construction are
-planned unless marked as implemented in the preceding table.
+The pipeline below is implemented and covered by unit, fixture, CLI, and golden
+report tests.
 
 ```text
 CLI / Project discovery
@@ -252,7 +237,7 @@ Rubydex SemanticIndex    Prism CallSiteExtractor
 
 ### 8.1 CLI and project discovery
 
-**Planned files**
+**Current files**
 
 - `lib/fiber_audit/cli.rb`
 - `lib/fiber_audit/project.rb`
@@ -328,9 +313,7 @@ Known adapter limitations and required R1 repairs are documented in
 
 ### 8.4 Syntax and call-site extraction
 
-**Current placeholder:** `lib/fiber_audit/static/source_index.rb`
-
-**Planned files:**
+**Current files:**
 
 - `lib/fiber_audit/static/call_site.rb`
 - `lib/fiber_audit/static/call_site_extractor.rb`
@@ -349,12 +332,11 @@ execution_context, resolution, confidence
 ```
 
 The extractor parses each file once and performs conservative receiver
-inference. The placeholder `SourceIndex` is not the final public contract and
-is expected to be folded into or replaced by `CallSiteExtractor`.
+inference. The obsolete `SourceIndex` placeholder has been removed.
 
 ### 8.5 Execution-context resolution
 
-**Planned files:**
+**Current files:**
 
 - `lib/fiber_audit/execution_context.rb`
 - `lib/fiber_audit/static/execution_context_resolver.rb`
@@ -378,12 +360,12 @@ explicit and can lower confidence.
 
 ### 8.6 Static rule system
 
-**Planned files:** `lib/fiber_audit/static/rules/`
+**Current files:** `lib/fiber_audit/static/rules/`
 
 Rules consume FiberAudit `CallSite` values and emit `Finding` values. They do
 not parse files and do not access Rubydex directly.
 
-Planned v0.1.0 rules:
+Shipped v0.1.0 rules:
 
 | ID | Concern | Default severity |
 |---|---|---:|
@@ -478,7 +460,7 @@ comment locations rather than unrestricted line scans.
 
 ### 8.9 Audit coordinator
 
-**Planned file:** `lib/fiber_audit/audit.rb`
+**Current file:** `lib/fiber_audit/audit.rb`
 
 The coordinator owns pipeline sequencing, not component internals. Its result
 must contain enough information for all reporters:
@@ -491,7 +473,7 @@ must contain enough information for all reporters:
 
 ### 8.10 Reporters
 
-**Planned files:** `lib/fiber_audit/reporters/`
+**Current files:** `lib/fiber_audit/reporters/`
 
 Reporters consume `Audit::Result`; they do not rerun analysis or apply
 suppressions.
@@ -555,7 +537,7 @@ Every v0.1.0 report must include:
 
 > This is a static-only audit. PASS cannot be granted without runtime coverage.
 
-### Planned exit codes
+### Exit codes
 
 | Code | Meaning |
 |---:|---|
@@ -564,8 +546,8 @@ Every v0.1.0 report must include:
 | 2 | Configuration or analysis error |
 | 3 | Reserved; not emitted in v0.1.0 |
 
-These result and exit-code semantics are planned; the current `static` command
-always reports that analysis is not implemented and exits 2.
+The `static` command implements these result and exit-code semantics. Source
+parse errors remain report data so analysis can continue on other files.
 
 ## 11. Error Handling
 
@@ -588,14 +570,12 @@ Tests mirror `lib/` under `spec/`.
 
 ### Current coverage
 
-- finding value objects and ordering;
-- fingerprint stability and path normalization;
-- collection filtering and evidence publication through `add`;
-- configuration defaults and partial validation;
-- inline/YAML suppression parsing and matching;
-- preliminary Rubydex adapter behavior.
+The suite covers value objects, semantic adaptation, call-site extraction,
+context resolution, all built-in rules, configuration, suppressions, project
+discovery, orchestration, reporters, CLI exit paths, and a versioned golden
+report.
 
-### Required v0.1.0 coverage
+### v0.1.0 coverage
 
 - exact `CallSite` extraction and receiver inference;
 - execution-context classification;
@@ -657,14 +637,16 @@ rather than establish a parallel reporting model.
 ## 14. Repository Map
 
 ```text
-lib/fiber_audit.rb                         current public loader
-lib/fiber_audit/cli.rb                     partial CLI
-lib/fiber_audit/configuration.rb           partial configuration boundary
-lib/fiber_audit/findings/                  current value objects
-lib/fiber_audit/correlation/fingerprint.rb current stable identity
-lib/fiber_audit/suppressions/              current suppression utilities
-lib/fiber_audit/static/semantic_index.rb   partial Rubydex adapter
-lib/fiber_audit/static/source_index.rb     placeholder Prism index
+lib/fiber_audit.rb                         public loader
+lib/fiber_audit/cli.rb                     command and exit-code boundary
+lib/fiber_audit/project.rb                 root/config discovery
+lib/fiber_audit/audit.rb                   static coordinator
+lib/fiber_audit/configuration.rb           validated static configuration
+lib/fiber_audit/findings/                  public result values
+lib/fiber_audit/correlation/fingerprint.rb stable identity
+lib/fiber_audit/suppressions/              suppression parsing and filtering
+lib/fiber_audit/static/                    semantic, call-site, context, rules
+lib/fiber_audit/reporters/                 text and JSON schema 1.0
 
 fiber_audit_v0.1.0_remediation_plan.md     corrected implementation sequence
 fiber_audit_v0.1.0_plan.md                 v0.1.0 contracts

@@ -230,9 +230,10 @@ module FiberAudit
           call_site = build_call_site(node)
           @call_sites << call_site if call_site
 
-          # Recurse into receiver and arguments
+          # Recurse into receiver, arguments, and attached block body.
           visit(node.receiver) if node.receiver
           visit(node.arguments) if node.arguments
+          visit(node.block) if node.block
         end
 
         def visit_assignment(node)

@@ -1,5 +1,6 @@
-# FiberAudit configuration
+# FiberAudit v0.1 static-analysis configuration
 static:
+  # Globs are evaluated from the detected project root.
   include:
     - app/**/*.rb
     - lib/**/*.rb
@@ -7,17 +8,26 @@ static:
   exclude:
     - vendor/**/*
     - tmp/**/*
+    - node_modules/**/*
     - db/schema.rb
+
+  # Optional YAML suppressions. Every entry must include a reason.
   # suppressions_path: .fiber-audit-suppressions.yml
 
 rules:
+  # Disable an individual rule.
   FA1007:
     enabled: false
+
+  # Override severity before the execution-context ceiling is applied.
   FA1003:
     severity: low
 
 report:
+  # Reserved output formats supported by v0.1. The CLI emits one format per run.
   formats:
     - text
     - json
+
+  # critical, high, medium, low, or info. Default low hides info findings.
   min_severity: low

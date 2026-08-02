@@ -31,6 +31,8 @@ require_relative 'fiber_audit/reporters/base'
 require_relative 'fiber_audit/reporters/schema'
 require_relative 'fiber_audit/reporters/text'
 require_relative 'fiber_audit/reporters/json'
+require_relative 'fiber_audit/project'
+require_relative 'fiber_audit/audit'
 require_relative 'fiber_audit/cli'
 
 module FiberAudit

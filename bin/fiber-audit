@@ -2,4 +2,4 @@
 # frozen_string_literal: true
 
 require 'fiber_audit/cli'
-FiberAudit::CLI.start(ARGV)
+exit FiberAudit::CLI.start(ARGV)

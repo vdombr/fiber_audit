@@ -233,6 +233,40 @@ RSpec.describe FiberAudit::Reporters::Schema do
       end
     end
 
+    context 'with symbol-valued built-in rule data' do
+      it 'normalizes optional fields and nested evidence details to primitives' do
+        symbol_evidence = FiberAudit::Evidence.new(
+          source: :static,
+          message: 'matched',
+          details: { receiver: :Kernel, nested: [:system, { context: :request }] }
+        )
+        symbol_finding = FiberAudit::Finding.new(
+          rule_id: 'FA1001',
+          title: 'Blocking subprocess call',
+          category: :subprocess,
+          severity: :high,
+          confidence: :high,
+          execution_context: :request,
+          message: 'matched',
+          evidence: [symbol_evidence]
+        )
+        symbol_result = double(
+          'result', findings: [symbol_finding], suppressed: [], parse_errors: [],
+                    coverage: coverage, status: 'FAIL'
+        )
+
+        normalized = described_class.build(symbol_result).fetch(:findings).first
+
+        expect(normalized[:category]).to eq('subprocess')
+        expect(normalized[:execution_context]).to eq('request')
+        expect(normalized.dig(:evidence, 0, :source)).to eq('static')
+        expect(normalized.dig(:evidence, 0, :details)).to eq(
+          'receiver' => 'Kernel',
+          'nested' => ['system', { 'context' => 'request' }]
+        )
+      end
+    end
+
     context 'with non-JSON-safe details' do
       it 'raises ReporterError for evidence with non-JSON-safe details' do
         bad_evidence = FiberAudit::Evidence.new(

@@ -764,6 +764,23 @@ RSpec.describe FiberAudit::Static::ExecutionContextResolver do
     end
   end
 
+  describe 'semantic ancestry caching' do
+    it 'queries each class once across repeated call sites' do
+      workspace = double('workspace')
+      allow(workspace).to receive(:ancestors_of).with('PlainService').and_return([])
+      resolver = described_class.new(workspace: workspace)
+      call_site = build_call_site(
+        path: 'app/services/plain_service.rb',
+        enclosing_symbol: 'PlainService#call',
+        nesting: ['PlainService']
+      )
+
+      resolver.resolve_all(call_sites: [call_site, call_site])
+
+      expect(workspace).to have_received(:ancestors_of).with('PlainService').once
+    end
+  end
+
   describe 'standalone require' do
     it 'can be required without full gem' do
       expect(defined?(FiberAudit::Static::ExecutionContextResolver)).to eq('constant')

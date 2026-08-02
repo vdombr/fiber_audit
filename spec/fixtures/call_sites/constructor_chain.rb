@@ -22,4 +22,10 @@ class ConstructorChain
     current_thread = Thread.current
     current_thread.thread_variable_get(:request_id)
   end
+
+  def attached_block_body
+    1.times do
+      IO.select([], [], [], 0)
+    end
+  end
 end

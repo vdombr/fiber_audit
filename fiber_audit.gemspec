@@ -6,8 +6,8 @@ Gem::Specification.new do |spec|
   spec.name          = 'fiber_audit'
   spec.version       = FiberAudit::VERSION
   spec.authors       = ['FiberAudit Contributors']
-  spec.summary       = 'Static and runtime fiber-scheduler compatibility auditor for Ruby/Rails applications'
-  spec.homepage      = 'https://github.com/fiber-audit/fiber_audit'
+  spec.summary       = 'Static fiber-scheduler compatibility auditor for Ruby and Rails applications'
+  spec.homepage      = 'https://github.com/vdombr/fiber_audit'
   spec.license       = 'MIT'
 
   spec.required_ruby_version = '>= 3.2.0'

@@ -33,6 +33,7 @@ module FiberAudit
       # @param workspace [Object] responds to ancestors_of(name) OR exposes semantic_index
       def initialize(workspace:)
         @workspace = workspace
+        @ancestor_cache = {}
       end
 
       # Resolve context for a single call site
@@ -130,13 +131,13 @@ module FiberAudit
 
       # Check class name and its transitive ancestors with cycle detection
       # @param class_name [String] the class name to check
-      # @param visited [Set] set of already-visited class names (for cycle detection)
+      # @param visited [Hash] names already visited during cycle detection
       # @return [Symbol, nil] the context if found, nil otherwise
-      def check_semantic_ancestors_transitive(class_name, visited = Set.new)
+      def check_semantic_ancestors_transitive(class_name, visited = {})
         return nil unless class_name
-        return nil if visited.include?(class_name)
+        return nil if visited.key?(class_name)
 
-        visited.add(class_name)
+        visited[class_name] = true
 
         # Match the class itself first (known class signal, even if ancestors empty)
         signal = SEMANTIC_SIGNALS[class_name]
@@ -230,19 +231,19 @@ module FiberAudit
       # Tries workspace.ancestors_of or workspace.semantic_index.ancestors_of
       def safe_ancestors_of(name)
         return [] unless name
+        return @ancestor_cache[name] if @ancestor_cache.key?(name)
 
-        # Try workspace.ancestors_of directly
-        if @workspace.respond_to?(:ancestors_of)
-          @workspace.ancestors_of(name)
-        # Try workspace.semantic_index.ancestors_of
-        elsif @workspace.respond_to?(:semantic_index) &&
-              @workspace.semantic_index.respond_to?(:ancestors_of)
-          @workspace.semantic_index.ancestors_of(name)
-        else
-          []
-        end
+        ancestors = if @workspace.respond_to?(:ancestors_of)
+                      @workspace.ancestors_of(name)
+                    elsif @workspace.respond_to?(:semantic_index) &&
+                          @workspace.semantic_index.respond_to?(:ancestors_of)
+                      @workspace.semantic_index.ancestors_of(name)
+                    else
+                      []
+                    end
+        @ancestor_cache[name] = Array(ancestors).dup.freeze
       rescue StandardError
-        []
+        @ancestor_cache[name] = [].freeze
       end
 
       # Create a new CallSite with execution_context populated

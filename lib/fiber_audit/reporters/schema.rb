@@ -136,21 +136,19 @@ module FiberAudit
         location = normalize_location(finding.location)
         evidence = normalize_evidence(finding.evidence, rule_id)
 
-        validate_optional_fields_json_safe!(finding)
-
         {
           rule_id: rule_id,
-          title: finding.title,
-          category: finding.category,
+          title: normalize_optional_field(finding.title, 'title'),
+          category: normalize_optional_field(finding.category, 'category'),
           severity: severity,
           confidence: confidence,
           location: location,
-          symbol: finding.symbol,
-          operation: finding.operation,
-          execution_context: finding.execution_context,
+          symbol: normalize_optional_field(finding.symbol, 'symbol'),
+          operation: normalize_optional_field(finding.operation, 'operation'),
+          execution_context: normalize_optional_field(finding.execution_context, 'execution_context'),
           message: message,
           evidence: evidence,
-          remediation: finding.remediation,
+          remediation: normalize_optional_field(finding.remediation, 'remediation'),
           fingerprint: fingerprint
         }
       end
@@ -177,16 +175,12 @@ module FiberAudit
         raise ReporterError, "finding has invalid confidence: #{confidence.inspect}"
       end
 
-      def validate_optional_fields_json_safe!(finding)
-        %i[title category symbol operation execution_context remediation].each do |field|
-          next unless finding.respond_to?(field)
+      def normalize_optional_field(value, field)
+        return nil if value.nil?
+        return value.to_s if value.is_a?(Symbol)
+        return value if json_safe?(value)
 
-          value = finding.send(field)
-          next if value.nil?
-          next if json_safe?(value)
-
-          raise ReporterError, "finding.#{field} is not JSON-safe: #{value.class}"
-        end
+        raise ReporterError, "finding.#{field} is not JSON-safe: #{value.class}"
       end
 
       def normalize_location(location)
@@ -239,16 +233,34 @@ module FiberAudit
         raise ReporterError, "Finding (#{rule_id}) evidence[#{idx}].message must be non-empty" if message.empty?
 
         details = evidence.respond_to?(:details) ? evidence.details : {}
-        validate_details_json_safe!(details, rule_id, idx)
+        normalized_details = normalize_json_value(details, rule_id, idx)
 
-        { source: source, message: message, details: details }
+        { source: source, message: message, details: normalized_details }
       end
 
-      def validate_details_json_safe!(details, rule_id, ev_idx)
-        return if details.nil?
-        return if json_safe_recursive?(details)
+      def normalize_json_value(value, rule_id, evidence_index)
+        case value
+        when Symbol
+          value.to_s
+        when Hash
+          value.each_with_object({}) do |(key, nested), normalized|
+            unless key.is_a?(String) || key.is_a?(Symbol)
+              raise ReporterError, details_error(rule_id, evidence_index, key.class)
+            end
 
-        raise ReporterError, "Finding (#{rule_id}) evidence[#{ev_idx}].details is not JSON-safe: #{details.class}"
+            normalized[key.to_s] = normalize_json_value(nested, rule_id, evidence_index)
+          end
+        when Array
+          value.map { |nested| normalize_json_value(nested, rule_id, evidence_index) }
+        else
+          return value if json_safe?(value)
+
+          raise ReporterError, details_error(rule_id, evidence_index, value.class)
+        end
+      end
+
+      def details_error(rule_id, evidence_index, value_class)
+        "Finding (#{rule_id}) evidence[#{evidence_index}].details is not JSON-safe: #{value_class}"
       end
 
       def json_safe?(value)
