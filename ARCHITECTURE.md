@@ -52,15 +52,9 @@ The following belong to later releases:
 
 ## 3. Sources of Truth
 
-When documents disagree, use this precedence:
-
-1. Current code and specs define what is implemented.
-2. `fiber_audit_v0.1.0_remediation_plan.md` defines corrected v0.1.0 decisions
-   and supersedes older plans where it states a conflict.
-3. `fiber_audit_v0.1.0_plan.md` defines the remaining v0.1.0 contracts.
-4. `fiber_audit_architecture_plan.md` describes the longer-term product vision.
-5. `fiber_audit_v0.1.0_implementation_findings.md` is a review snapshot, not a
-   substitute for current code.
+Current code and specs define implementation truth. This document records the
+supported architecture and dependency boundaries; README and CHANGELOG record
+the user-facing release contract.
 
 The corrected platform target is Ruby `>= 3.3` with CI configured for Ruby 3.3
 and 3.4. Ruby 3.2 is excluded because it is end-of-life.
@@ -308,8 +302,8 @@ FiberAudit-owned values:
 - `Constant`
 - `RubydexGap`
 
-Known adapter limitations and required R1 repairs are documented in
-`fiber_audit_v0.1.0_remediation_plan.md` and the Rubydex spike fixtures.
+Known adapter limitations are exposed as `RubydexGap` values and documented by
+the Rubydex spike fixtures.
 
 ### 8.4 Syntax and call-site extraction
 
@@ -646,22 +640,17 @@ lib/fiber_audit/correlation/fingerprint.rb stable identity
 lib/fiber_audit/suppressions/              suppression parsing and filtering
 lib/fiber_audit/static/                    semantic, call-site, context, rules
 lib/fiber_audit/reporters/                 text and JSON schema 1.0
-
-fiber_audit_v0.1.0_remediation_plan.md     corrected implementation sequence
-fiber_audit_v0.1.0_plan.md                 v0.1.0 contracts
-fiber_audit_architecture_plan.md           long-term product architecture
+ARCHITECTURE.md                             supported architecture and boundaries
 ```
 
 ## 15. Maintaining This Document
 
-Update this document when an implementation wave lands:
+Update this document when the supported architecture changes:
 
-1. Move a component from planned to implemented only when source and meaningful
-   specs exist.
+1. Describe components as implemented only when source and meaningful specs
+   exist.
 2. Update diagrams when dependency direction changes.
 3. Record external report-schema changes as versioned contract changes.
 4. Keep future runtime architecture separate from current static behavior.
-5. Prefer links to detailed remediation tasks over embedding transient bug
-   lists here.
 6. Never use the existence of a built gem artifact as evidence that a release or
    architecture stage is complete.
