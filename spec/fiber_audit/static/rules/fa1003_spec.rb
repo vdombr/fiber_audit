@@ -194,6 +194,20 @@ RSpec.describe FiberAudit::Static::Rules::Synchronization do
       expect(findings.size).to eq(1)
     end
 
+    it 'falls back to an explicit MonitorMixin include call site' do
+      include_site = build_site(
+        receiver_source: nil, receiver_constant: nil, method_name: :include,
+        arguments: ['MonitorMixin'], enclosing_symbol: nil, nesting: ['MyService']
+      )
+      synchronize_site = build_site(
+        receiver_source: nil, receiver_constant: nil, method_name: :synchronize,
+        enclosing_symbol: 'MyService#process', nesting: ['MyService']
+      )
+
+      findings = rule.analyze(call_sites: [include_site, synchronize_site])
+      expect(findings.map(&:operation)).to eq(['MonitorMixin#synchronize'])
+    end
+
     it 'does not detect synchronize without MonitorMixin ancestry' do
       workspace.ancestors_map['MyService'] = %w[Object Kernel BasicObject]
 

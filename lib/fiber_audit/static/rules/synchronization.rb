@@ -29,17 +29,19 @@ module FiberAudit
                       'contention and scheduler behaviour under load.'
 
         def analyze(call_sites:)
-          call_sites.filter_map { |site| check(site) }
+          explicit_monitor_mixins = explicit_monitor_mixin_classes(call_sites)
+          call_sites.filter_map { |site| check(site, explicit_monitor_mixins) }
         rescue StandardError
           []
         end
 
         private
 
-        def check(site)
+        def check(site, explicit_monitor_mixins)
           if site.receiver_source.nil? && site.receiver_constant.nil? && site.method_name == :synchronize
             klass = extract_class_name(site.enclosing_symbol)
-            return unless klass && monitor_mixin_ancestor?(klass)
+            semantic_match = klass && monitor_mixin_ancestor?(klass)
+            return unless semantic_match || explicit_monitor_mixins.include?(klass)
             return if workspace_shadow?('MonitorMixin', site.nesting)
 
             return build_finding(site, 'MonitorMixin', :synchronize)
@@ -86,6 +88,15 @@ module FiberAudit
           rescue StandardError
             false
           end
+        end
+
+        def explicit_monitor_mixin_classes(call_sites)
+          call_sites.filter_map do |site|
+            next unless site.receiver_source.nil? && site.method_name == :include
+            next unless Array(site.arguments).any? { |argument| argument.to_s.delete_prefix('::') == 'MonitorMixin' }
+
+            Array(site.nesting).last
+          end.uniq
         end
 
         def build_finding(site, target, method)

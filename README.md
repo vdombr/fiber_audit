@@ -8,7 +8,7 @@ running a Fiber scheduler. Version 0.1.0 performs static analysis only.
 
 ## Requirements and installation
 
-FiberAudit supports Ruby 3.2, 3.3, and 3.4.
+FiberAudit supports maintained Ruby versions starting with Ruby 3.3.
 
 ```sh
 gem install fiber_audit

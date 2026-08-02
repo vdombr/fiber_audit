@@ -2,7 +2,7 @@
 
 ## 0.1.0 (unreleased)
 
-First static-only release of FiberAudit.
+First static-only release of FiberAudit. Requires Ruby 3.3 or newer.
 
 ### Added
 
