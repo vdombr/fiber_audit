@@ -52,6 +52,7 @@ GEM
     ruby-progressbar (1.13.0)
     rubydex (0.2.9)
     rubydex (0.2.9-arm64-darwin)
+    rubydex (0.2.9-x86_64-linux)
     unicode-display_width (3.2.0)
       unicode-emoji (~> 4.1)
     unicode-emoji (4.2.0)
@@ -59,6 +60,7 @@ GEM
 PLATFORMS
   arm64-darwin-24
   ruby
+  x86_64-linux
 
 DEPENDENCIES
   fiber_audit!
@@ -90,6 +92,7 @@ CHECKSUMS
   ruby-progressbar (1.13.0) sha256=80fc9c47a9b640d6834e0dc7b3c94c9df37f08cb072b7761e4a71e22cff29b33
   rubydex (0.2.9) sha256=c4c0f707586c01e59926b62a8193df38b5d00b7c35d35677dab1fb059903e289
   rubydex (0.2.9-arm64-darwin) sha256=1c014e3c244102739914d528202b1d0f54bdc3d1f85667b81b65ea22aabfa560
+  rubydex (0.2.9-x86_64-linux) sha256=f500e843d285def8fc799e0f9a989b9ba2b01b9372bde6ab0a6831738b3f6956
   unicode-display_width (3.2.0) sha256=0cdd96b5681a5949cdbc2c55e7b420facae74c4aaf9a9815eee1087cb1853c42
   unicode-emoji (4.2.0) sha256=519e69150f75652e40bf736106cfbc8f0f73aa3fb6a65afe62fefa7f80b0f80f
 
