@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.0 (unreleased)
+## 0.1.0 (2026-08-02)
 
 First static-only release of FiberAudit. Requires Ruby 3.3 or newer.
 
