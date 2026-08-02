@@ -1,0 +1,54 @@
+name: Release gem
+
+on:
+  release:
+    types: [published]
+
+permissions: {}
+
+concurrency:
+  group: rubygems-release-${{ github.event.release.tag_name }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish to RubyGems.org
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.release.tag_name }}
+          persist-credentials: false
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.4'
+          bundler-cache: true
+
+      - name: Verify release tag and gem version
+        id: version
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          gem_version="$(bundle exec ruby -Ilib -e 'require "fiber_audit/version"; print FiberAudit::VERSION')"
+          test "$RELEASE_TAG" = "v$gem_version"
+          echo "version=$gem_version" >> "$GITHUB_OUTPUT"
+
+      - name: Configure RubyGems trusted publishing
+        uses: rubygems/configure-rubygems-credentials@dc5a8d8553e6ee01fc26761a49e99e733d17954a # v2.1.0
+
+      - name: Build gem
+        env:
+          GEM_VERSION: ${{ steps.version.outputs.version }}
+        run: gem build fiber_audit.gemspec --output "fiber_audit-$GEM_VERSION.gem"
+
+      - name: Publish gem
+        env:
+          GEM_VERSION: ${{ steps.version.outputs.version }}
+        run: gem push "fiber_audit-$GEM_VERSION.gem"
