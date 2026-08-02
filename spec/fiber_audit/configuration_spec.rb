@@ -608,6 +608,76 @@ RSpec.describe FiberAudit::Configuration do
     end
   end
 
+  describe 'runtime policy configuration' do
+    it 'uses a strict, fail-open runtime policy by default' do
+      policy = described_class.new.runtime_policy
+      expect(policy).to be_a(FiberAudit::Runtime::Policy)
+      expect(policy).to be_strict_redaction
+      expect(policy).to be_fail_open
+    end
+
+    it 'loads the complete nested runtime policy' do
+      yaml_content = {
+        'runtime' => {
+          'redaction' => { 'mode' => 'strict' },
+          'sampling' => { 'rate' => 0.75 },
+          'overhead' => {
+            'max_events_per_second' => 12,
+            'max_events_per_session' => 345,
+            'max_record_bytes' => 2_048,
+            'max_session_bytes' => 8_192
+          },
+          'fail_open' => false
+        }
+      }
+
+      with_configuration(yaml_content) do |config|
+        expect(config.runtime_policy.to_h).to eq(
+          redaction: :strict,
+          sampling_rate: 0.75,
+          max_events_per_second: 12,
+          max_events_per_session: 345,
+          max_record_bytes: 2_048,
+          max_session_bytes: 8_192,
+          fail_open: false
+        )
+      end
+    end
+
+    it 'rejects a non-mapping runtime section and nested section' do
+      expect { with_configuration('runtime' => []) { nil } }
+        .to raise_error(FiberAudit::ConfigurationError, /runtime must be a mapping/)
+      expect { with_configuration('runtime' => { 'sampling' => 1 }) { nil } }
+        .to raise_error(FiberAudit::ConfigurationError, /runtime\.sampling must be a mapping/)
+    end
+
+    it 'rejects unknown nested runtime keys' do
+      yaml = { 'runtime' => { 'overhead' => { 'sleep' => 1 } } }
+      expect { with_configuration(yaml) { nil } }
+        .to raise_error(FiberAudit::ConfigurationError, /unknown configuration key 'sleep' at runtime\.overhead/)
+    end
+
+    it 'wraps invalid policy values as configuration errors' do
+      yaml = { 'runtime' => { 'sampling' => { 'rate' => 2.0 } } }
+      expect { with_configuration(yaml) { nil } }
+        .to raise_error(FiberAudit::ConfigurationError, /runtime\.sampling\.rate is invalid/)
+    end
+
+    it 'rejects a non-policy value passed directly' do
+      expect { described_class.new(runtime_policy: {}) }
+        .to raise_error(FiberAudit::ConfigurationError, /runtime_policy/)
+    end
+
+    it 'loads the runtime policy dependency when required standalone' do
+      output, _stderr, status = Open3.capture3(
+        RbConfig.ruby, '-Ilib', '-rfiber_audit/configuration',
+        '-e', 'puts FiberAudit::Configuration.new.runtime_policy.class'
+      )
+      expect(status).to be_success
+      expect(output.strip).to eq('FiberAudit::Runtime::Policy')
+    end
+  end
+
   describe 'Configuration.load severity coercion' do
     it 'does not call to_sym on arbitrary YAML min_severity' do
       yaml_content = {
@@ -640,6 +710,14 @@ RSpec.describe FiberAudit::Configuration do
         expect(config.min_severity).to eq(:high)
         expect(config.min_severity).to be_a(Symbol)
       end
+    end
+  end
+
+  def with_configuration(content)
+    Dir.mktmpdir do |dir|
+      path = File.join(dir, '.fiber-audit.yml')
+      File.write(path, YAML.dump(content))
+      yield described_class.load(path)
     end
   end
 end

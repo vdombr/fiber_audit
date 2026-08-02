@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Foundational runtime event, session, safety-policy, redaction, and JSONL
+  contracts for the future observational runtime auditor. Recording and
+  instrumentation are not implemented yet.
+
 ## 0.1.0 (2026-08-02)
 
 First static-only release of FiberAudit. Requires Ruby 3.3 or newer.

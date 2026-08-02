@@ -4,13 +4,29 @@ require 'yaml'
 require 'pathname'
 require_relative 'errors'
 require_relative 'findings/severity'
+require_relative 'runtime/policy'
 
 module FiberAudit
   class Configuration
-    KNOWN_TOP_LEVEL_KEYS = %w[static rules report].freeze
+    KNOWN_TOP_LEVEL_KEYS = %w[static rules report runtime].freeze
     KNOWN_STATIC_KEYS = %w[include exclude suppressions_path].freeze
     KNOWN_REPORT_KEYS = %w[formats min_severity].freeze
     KNOWN_RULE_KEYS = %w[enabled severity].freeze
+    KNOWN_RUNTIME_KEYS = %w[redaction sampling overhead fail_open].freeze
+    KNOWN_REDACTION_KEYS = %w[mode].freeze
+    KNOWN_SAMPLING_KEYS = %w[rate].freeze
+    KNOWN_OVERHEAD_KEYS = %w[
+      max_events_per_second max_events_per_session max_record_bytes max_session_bytes
+    ].freeze
+    RUNTIME_POLICY_PATHS = {
+      'redaction' => 'runtime.redaction.mode',
+      'sampling_rate' => 'runtime.sampling.rate',
+      'max_events_per_second' => 'runtime.overhead.max_events_per_second',
+      'max_events_per_session' => 'runtime.overhead.max_events_per_session',
+      'max_record_bytes' => 'runtime.overhead.max_record_bytes',
+      'max_session_bytes' => 'runtime.overhead.max_session_bytes',
+      'fail_open' => 'runtime.fail_open'
+    }.freeze
     VALID_FORMATS = %w[text json].freeze
 
     DEFAULT_STATIC_INCLUDE = %w[
@@ -28,7 +44,8 @@ module FiberAudit
     ].freeze
 
     attr_reader :static_include, :static_exclude, :rules_config,
-                :report_formats, :min_severity, :suppressions_path
+                :report_formats, :min_severity, :suppressions_path,
+                :runtime_policy
 
     def initialize(
       static_include: DEFAULT_STATIC_INCLUDE,
@@ -36,11 +53,12 @@ module FiberAudit
       rules_config: {},
       report_formats: %w[text],
       min_severity: :low,
-      suppressions_path: nil
+      suppressions_path: nil,
+      runtime_policy: Runtime::Policy.new
     )
       validate_types!(
         static_include, static_exclude, rules_config,
-        report_formats, min_severity, suppressions_path
+        report_formats, min_severity, suppressions_path, runtime_policy
       )
 
       @static_include = static_include
@@ -49,6 +67,7 @@ module FiberAudit
       @report_formats = report_formats
       @min_severity = coerce_severity(min_severity, 'report.min_severity')
       @suppressions_path = suppressions_path
+      @runtime_policy = runtime_policy
     end
 
     def rule_enabled?(rule_id)
@@ -76,6 +95,7 @@ module FiberAudit
         static = yaml['static'] || {}
         rules = yaml['rules'] || {}
         report = yaml['report'] || {}
+        runtime = yaml['runtime'] || {}
 
         new(
           static_include: static['include'] || DEFAULT_STATIC_INCLUDE,
@@ -83,7 +103,8 @@ module FiberAudit
           rules_config: rules,
           report_formats: report['formats'] || %w[text],
           min_severity: report.fetch('min_severity', :low),
-          suppressions_path: static['suppressions_path']
+          suppressions_path: static['suppressions_path'],
+          runtime_policy: runtime_policy_from(runtime)
         )
       end
 
@@ -115,6 +136,8 @@ module FiberAudit
           check_unknown_keys(report, KNOWN_REPORT_KEYS, 'report')
         end
 
+        validate_runtime_structure!(yaml['runtime']) if yaml.key?('runtime')
+
         return unless yaml.key?('rules')
 
         rules = yaml['rules']
@@ -122,6 +145,48 @@ module FiberAudit
 
         raise ConfigurationError,
               "rules must be a mapping, got #{rules.class}"
+      end
+
+      def validate_runtime_structure!(runtime)
+        unless runtime.is_a?(Hash)
+          raise ConfigurationError,
+                "runtime must be a mapping, got #{runtime.class}"
+        end
+        check_unknown_keys(runtime, KNOWN_RUNTIME_KEYS, 'runtime')
+        validate_runtime_mapping!(runtime, 'redaction', KNOWN_REDACTION_KEYS)
+        validate_runtime_mapping!(runtime, 'sampling', KNOWN_SAMPLING_KEYS)
+        validate_runtime_mapping!(runtime, 'overhead', KNOWN_OVERHEAD_KEYS)
+      end
+
+      def validate_runtime_mapping!(runtime, key, allowed)
+        return unless runtime.key?(key)
+
+        value = runtime[key]
+        unless value.is_a?(Hash)
+          raise ConfigurationError,
+                "runtime.#{key} must be a mapping, got #{value.class}"
+        end
+        check_unknown_keys(value, allowed, "runtime.#{key}")
+      end
+
+      def runtime_policy_from(runtime)
+        defaults = Runtime::Policy::DEFAULTS
+        redaction = runtime.fetch('redaction', {})
+        sampling = runtime.fetch('sampling', {})
+        overhead = runtime.fetch('overhead', {})
+        Runtime::Policy.new(
+          redaction: redaction.fetch('mode', defaults[:redaction]),
+          sampling_rate: sampling.fetch('rate', defaults[:sampling_rate]),
+          max_events_per_second: overhead.fetch('max_events_per_second', defaults[:max_events_per_second]),
+          max_events_per_session: overhead.fetch('max_events_per_session', defaults[:max_events_per_session]),
+          max_record_bytes: overhead.fetch('max_record_bytes', defaults[:max_record_bytes]),
+          max_session_bytes: overhead.fetch('max_session_bytes', defaults[:max_session_bytes]),
+          fail_open: runtime.fetch('fail_open', defaults[:fail_open])
+        )
+      rescue RuntimeContractError => e
+        field = e.message.split.first
+        path = RUNTIME_POLICY_PATHS.fetch(field, 'runtime')
+        raise ConfigurationError, "#{path} is invalid: #{e.message}"
       end
 
       def check_unknown_keys(hash, allowed, path)
@@ -139,7 +204,7 @@ module FiberAudit
 
     def validate_types!(
       include_patterns, exclude_patterns, rules,
-      formats, _severity, suppressions
+      formats, _severity, suppressions, runtime_policy
     )
       unless include_patterns.is_a?(Array) &&
              include_patterns.all?(String)
@@ -157,6 +222,11 @@ module FiberAudit
 
       validate_rules!(rules)
       validate_report_formats!(formats)
+
+      unless runtime_policy.is_a?(Runtime::Policy)
+        raise ConfigurationError,
+              'runtime_policy must be a FiberAudit::Runtime::Policy'
+      end
 
       return if suppressions.nil? || suppressions.is_a?(String)
 

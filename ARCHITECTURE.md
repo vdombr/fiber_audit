@@ -22,7 +22,8 @@ A static-only result must never claim an unconditional `PASS`.
 > **Repository status:** the v0.1.0 static pipeline is implemented end to end:
 > project discovery, configuration, semantic and syntax analysis, execution
 > contexts, FA1001–FA1007, suppressions, status derivation, text/JSON reports,
-> and the CLI. Runtime analysis remains future work.
+> and the CLI. The v0.2 runtime event, session, policy, redaction, and JSONL
+> contracts are implemented; recording and instrumentation remain future work.
 
 ## 2. Scope
 
@@ -614,9 +615,14 @@ Static findings                   Runtime events
        Confirmed / static-only / runtime-only findings
 ```
 
-Planned runtime concepts include:
+The foundational runtime contracts are implemented under
+`lib/fiber_audit/runtime/`: immutable event/session values, strict redaction and
+resource policy, and an independently versioned JSONL schema. They perform no
+instrumentation or file I/O.
 
-- observational JSONL sessions;
+Remaining runtime concepts include:
+
+- observational JSONL session recording;
 - scheduler-stall detection;
 - targeted `Module#prepend` instrumentation;
 - limited `TracePoint` use;
@@ -640,6 +646,7 @@ lib/fiber_audit/correlation/fingerprint.rb stable identity
 lib/fiber_audit/suppressions/              suppression parsing and filtering
 lib/fiber_audit/static/                    semantic, call-site, context, rules
 lib/fiber_audit/reporters/                 text and JSON schema 1.0
+lib/fiber_audit/runtime/                    runtime values, safety, JSONL schema
 ARCHITECTURE.md                             supported architecture and boundaries
 ```
 

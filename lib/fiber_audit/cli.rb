@@ -117,7 +117,8 @@ module FiberAudit
         rules_config: configuration.rules_config,
         report_formats: configuration.report_formats,
         min_severity: severity,
-        suppressions_path: configuration.suppressions_path
+        suppressions_path: configuration.suppressions_path,
+        runtime_policy: configuration.runtime_policy
       )
     end
 

@@ -130,11 +130,15 @@ RSpec.describe FiberAudit::CLI do
       expect(tty_output.string).to start_with("FiberAudit #{FiberAudit::VERSION}")
     end
 
-    it 'applies the command-line minimum severity override' do
+    it 'applies the command-line minimum severity override without losing runtime policy' do
       root = File.join(fixtures, 'poro_clean')
+      policy = FiberAudit::Runtime::Policy.new(sampling_rate: 0.75)
+      allow(FiberAudit::Configuration).to receive(:load)
+        .and_return(FiberAudit::Configuration.new(runtime_policy: policy))
       audit = instance_double(FiberAudit::Audit, call: no_findings_result)
       expect(FiberAudit::Audit).to receive(:new) do |configuration:, root:|
         expect(configuration.min_severity).to eq(:critical)
+        expect(configuration.runtime_policy).to equal(policy)
         expect(root).to eq(File.realpath(File.join(fixtures, 'poro_clean')))
         audit
       end

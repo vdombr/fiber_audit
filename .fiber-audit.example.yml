@@ -31,3 +31,17 @@ report:
 
   # critical, high, medium, low, or info. Default low hides info findings.
   min_severity: low
+
+# Runtime execution is not implemented yet. These values freeze the v0.2 safety
+# contract for the future observational recorder.
+runtime:
+  redaction:
+    mode: strict
+  sampling:
+    rate: 0.1
+  overhead:
+    max_events_per_second: 100
+    max_events_per_session: 10000
+    max_record_bytes: 16384
+    max_session_bytes: 10485760
+  fail_open: true

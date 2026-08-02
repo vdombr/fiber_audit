@@ -5,4 +5,6 @@ module FiberAudit
   class EmptyEvidenceError < StandardError; end
   class ReporterError < StandardError; end
   class ProjectError < StandardError; end
+  class RuntimeContractError < ArgumentError; end
+  class RuntimeSafetyError < StandardError; end
 end
