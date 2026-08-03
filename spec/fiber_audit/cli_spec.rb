@@ -3,6 +3,7 @@
 require 'spec_helper'
 require 'fiber_audit/cli'
 require 'json'
+require 'rbconfig'
 require 'stringio'
 require 'tmpdir'
 require 'fileutils'
@@ -86,6 +87,136 @@ RSpec.describe FiberAudit::CLI do
     it 'returns two for a missing or unknown rule' do
       expect(run_cli('explain')).to eq(2)
       expect(run_cli('explain', 'FA9999')).to eq(2)
+    end
+  end
+
+  describe 'runtime' do
+    def with_runtime_project
+      Dir.mktmpdir do |root|
+        File.write(File.join(root, 'Gemfile'), "source 'https://rubygems.org'\n")
+        yield root
+      end
+    end
+
+    def runtime_files(directory)
+      Dir.glob(File.join(directory, '*.jsonl'))
+    end
+
+    it 'prints runtime help without requiring a command separator' do
+      expect(run_cli('runtime', '--help')).to eq(0)
+      expect(stdout.string).to include('fiber-audit runtime', '-- COMMAND')
+    end
+
+    it 'requires a literal separator and a command' do
+      expect(run_cli('runtime', RbConfig.ruby)).to eq(2)
+      expect(stderr.string).to include('separator -- is required')
+
+      stderr.truncate(0)
+      stderr.rewind
+      expect(run_cli('runtime', '--')).to eq(2)
+      expect(stderr.string).to include('command is required')
+    end
+
+    it 'preserves a successful and nonzero Ruby child status' do
+      with_runtime_project do |root|
+        output = File.join(root, 'sessions')
+        expect(run_cli('runtime', '--out', output, '--', RbConfig.ruby, '-e', 'exit 0', cwd: root)).to eq(0)
+        expect(run_cli('runtime', '--out', output, '--', RbConfig.ruby, '-e', 'exit 7', cwd: root)).to eq(7)
+
+        expect(runtime_files(output).size).to eq(2)
+        runtime_files(output).each do |path|
+          records = File.readlines(path, chomp: true).map { |line| JSON.parse(line) }
+          expect(records.map { |record| record['record_type'] }).to eq(%w[session_start session_end])
+          expect(File.stat(path).mode & 0o777).to eq(0o600)
+        end
+      end
+    end
+
+    it 'returns the conventional status for a signalled child and keeps complete JSONL lines' do
+      skip 'TERM is unavailable' unless Signal.list.key?('TERM')
+
+      with_runtime_project do |root|
+        output = File.join(root, 'sessions')
+        script = "Process.kill('TERM', Process.pid); sleep"
+
+        result = run_cli('runtime', '--out', output, '--', RbConfig.ruby, '-e', script, cwd: root)
+        lines = File.readlines(runtime_files(output).first, chomp: true)
+
+        expect(result).to eq(128 + Signal.list.fetch('TERM'))
+        expect(lines).not_to be_empty
+        expect { lines.each { |line| JSON.parse(line) } }.not_to raise_error
+      end
+    end
+
+    it 'preserves a non-Ruby command status without inventing a session' do
+      executable = %w[/usr/bin/true /bin/true].find { |path| File.executable?(path) }
+      skip 'true executable is unavailable' unless executable
+
+      with_runtime_project do |root|
+        output = File.join(root, 'sessions')
+
+        expect(run_cli('runtime', '--out', output, '--', executable, cwd: root)).to eq(0)
+        expect(runtime_files(output)).to be_empty
+      end
+    end
+
+    it 'passes option-looking command arguments without reparsing or shell interpolation' do
+      with_runtime_project do |root|
+        output = File.join(root, 'runtime output')
+        result_path = File.join(root, 'arguments.txt')
+        script = 'path = ARGV.shift; File.write(path, ARGV.join("|"))'
+
+        result = run_cli(
+          'runtime', '--out', output, '--', RbConfig.ruby, '-e', script,
+          result_path, '--not-a-runtime-option', 'argument with spaces', '*.rb', cwd: root
+        )
+
+        expect(result).to eq(0)
+        expect(File.read(result_path)).to eq('--not-a-runtime-option|argument with spaces|*.rb')
+      end
+    end
+
+    it 'applies policy overrides while preserving configured limits' do
+      with_runtime_project do |root|
+        File.write(
+          File.join(root, '.fiber-audit.yml'),
+          <<~YAML
+            runtime:
+              sampling:
+                rate: 0.25
+              overhead:
+                max_events_per_second: 17
+          YAML
+        )
+        output = File.join(root, 'sessions')
+
+        result = run_cli(
+          'runtime', '--out', output, '--sampling-rate', '0.8', '--no-fail-open',
+          '--', RbConfig.ruby, '-e', 'exit 0', cwd: root
+        )
+        first_line = File.open(runtime_files(output).first, &:readline)
+        policy = JSON.parse(first_line).dig('payload', 'policy')
+
+        expect(result).to eq(0)
+        expect(policy.fetch('sampling_rate')).to eq(0.8)
+        expect(policy.fetch('fail_open')).to be(false)
+        expect(policy.fetch('max_events_per_second')).to eq(17)
+        expect(policy.fetch('max_events_per_session')).to eq(10_000)
+      end
+    end
+
+    it 'rejects configuration and output errors before spawning' do
+      with_runtime_project do |root|
+        expect(FiberAudit::Runtime::Supervisor).not_to receive(:new)
+        expect(run_cli('runtime', '--config', 'missing.yml', '--', 'ruby', cwd: root)).to eq(2)
+
+        stderr.truncate(0)
+        stderr.rewind
+        output_file = File.join(root, 'not-a-directory')
+        File.write(output_file, 'keep')
+        expect(run_cli('runtime', '--out', output_file, '--', 'ruby', cwd: root)).to eq(2)
+        expect(File.read(output_file)).to eq('keep')
+      end
     end
   end
 

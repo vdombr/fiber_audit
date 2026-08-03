@@ -22,9 +22,9 @@ A static-only result must never claim an unconditional `PASS`.
 > **Repository status:** the v0.1.0 static pipeline is implemented end to end:
 > project discovery, configuration, semantic and syntax analysis, execution
 > contexts, FA1001–FA1007, suppressions, status derivation, text/JSON reports,
-> and the CLI. The v0.2 runtime contracts and bounded, thread-safe JSONL
-> session recorder are implemented; process lifecycle and instrumentation remain
-> future work.
+> and the CLI. The v0.2 runtime contracts, bounded JSONL recorder, explicit
+> child-process boot, lifecycle, and supervising command are implemented;
+> scheduler monitoring and operation probes remain future work.
 
 ## 2. Scope
 
@@ -619,12 +619,14 @@ Static findings                   Runtime events
 The foundational runtime contracts and recorder are implemented under
 `lib/fiber_audit/runtime/`: immutable event/session values, strict redaction and
 resource policy, injected clocks and sampling, bounded JSONL writing, explicit
-drop accounting, and crash-tolerant session recording. Construction is explicit;
-loading the gem performs no instrumentation or file I/O.
+drop accounting, and crash-tolerant session recording. The explicit `runtime`
+command supervises a user-supplied command, injects a conditional Ruby boot,
+forwards signals, preserves child status, and creates a distinct session for each
+observed Ruby process. Loading the gem normally performs no instrumentation or
+file I/O.
 
 Remaining runtime concepts include:
 
-- explicit command/process lifecycle;
 - scheduler-stall detection;
 - targeted `Module#prepend` instrumentation;
 - limited `TracePoint` use;

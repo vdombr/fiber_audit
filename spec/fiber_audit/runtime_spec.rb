@@ -20,6 +20,9 @@ RSpec.describe 'FiberAudit runtime foundation loader' do
         FiberAudit::Runtime::JSONL::Schema,
         FiberAudit::Runtime::JSONL::Writer,
         FiberAudit::Runtime::Recorder,
+        FiberAudit::Runtime::Environment,
+        FiberAudit::Runtime::Lifecycle,
+        FiberAudit::Runtime::Supervisor,
         FiberAudit::RuntimeContractError,
         FiberAudit::RuntimeSafetyError
       ]
@@ -27,7 +30,7 @@ RSpec.describe 'FiberAudit runtime foundation loader' do
     RUBY
     output, stderr, status = Open3.capture3(RbConfig.ruby, '-Ilib', '-e', script)
     expect(status).to be_success, stderr
-    expect(output.strip).to eq('14')
+    expect(output.strip).to eq('17')
   end
 
   it 'does not load static analysis or framework dependencies' do
@@ -36,9 +39,10 @@ RSpec.describe 'FiberAudit runtime foundation loader' do
       prohibited = %w[Prism Rubydex Rails]
       puts prohibited.any? { |name| Object.const_defined?(name, false) }
       puts defined?(FiberAudit::Static).nil?
+      puts defined?(FiberAudit::Runtime::Boot).nil?
     RUBY
     output, stderr, status = Open3.capture3(RbConfig.ruby, '-Ilib', '-e', script)
     expect(status).to be_success, stderr
-    expect(output.lines.map(&:strip)).to eq(%w[false true])
+    expect(output.lines.map(&:strip)).to eq(%w[false true true])
   end
 end

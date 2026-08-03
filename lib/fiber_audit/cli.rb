@@ -9,6 +9,8 @@ require_relative 'audit'
 require_relative 'findings/severity'
 require_relative 'reporters/text'
 require_relative 'reporters/json'
+require_relative 'runtime/environment'
+require_relative 'runtime/supervisor'
 require_relative 'static/rules/built_ins'
 
 module FiberAudit
@@ -23,6 +25,8 @@ module FiberAudit
       case command
       when 'static'
         run_static(args, stdout: stdout, stderr: stderr, cwd: cwd)
+      when 'runtime'
+        run_runtime(args, stdout: stdout, cwd: cwd)
       when 'list-rules'
         reject_arguments!(args)
         list_rules(stdout)
@@ -53,12 +57,13 @@ module FiberAudit
 
         Commands:
           static       Run static fiber-compatibility analysis
+          runtime      Observe an explicitly supplied Ruby command
           list-rules   List all registered static rules
           explain ID   Explain a specific rule
           version      Print version
           help         Show this help
 
-        Run `fiber-audit static --help` for analysis options.
+        Run `fiber-audit static --help` or `fiber-audit runtime --help` for options.
       HELP
     end
 
@@ -75,6 +80,80 @@ module FiberAudit
       publish_report(report, options[:out], stdout, cwd)
 
       reportable_findings?(result.findings, configuration.min_severity) ? 1 : 0
+    end
+
+    def run_runtime(argv, stdout:, cwd:)
+      options, command, parser = parse_runtime_options(argv)
+      if options[:help]
+        stdout.puts parser
+        return 0
+      end
+
+      project = Project.detect(start_path: cwd)
+      configuration = load_configuration(project, options[:config])
+      policy = runtime_policy_with_overrides(configuration.runtime_policy, options)
+      output_directory = runtime_output_directory(options[:out], project)
+      settings = Runtime::Environment.build(
+        policy: policy,
+        output_directory: output_directory,
+        project_root: project.root
+      )
+      environment = Runtime::Environment.child_environment(settings: settings)
+      Runtime::Supervisor.new(
+        command: command,
+        environment: environment,
+        cwd: project.invocation_path
+      ).run
+    end
+
+    def parse_runtime_options(argv)
+      options = { config: nil, out: nil, sampling_rate: nil, no_fail_open: false, help: false }
+      parser = OptionParser.new do |opts|
+        opts.banner = 'Usage: fiber-audit runtime [options] -- COMMAND [ARGUMENTS...]'
+        opts.on('--config PATH', 'Path to configuration file') { |value| options[:config] = value }
+        opts.on('--out DIRECTORY', 'Directory for runtime JSONL sessions') { |value| options[:out] = value }
+        opts.on('--sampling-rate RATE', Float, 'Override runtime sampling rate') do |value|
+          options[:sampling_rate] = value
+        end
+        opts.on('--no-fail-open', 'Fail the Ruby child if runtime recording fails') { options[:no_fail_open] = true }
+        opts.on('-h', '--help', 'Show runtime options') { options[:help] = true }
+      end
+
+      separator = argv.index('--')
+      option_arguments = separator ? argv.take(separator) : argv.dup
+      command = separator ? argv.drop(separator + 1) : []
+      parser.parse!(option_arguments)
+      unless options[:help]
+        raise OptionParser::MissingArgument, 'runtime command separator -- is required' unless separator
+        raise OptionParser::MissingArgument, 'runtime command is required after --' if command.empty?
+      end
+      reject_arguments!(option_arguments)
+      [options, command, parser]
+    end
+
+    def runtime_policy_with_overrides(policy, options)
+      values = policy.to_h
+      values[:sampling_rate] = options[:sampling_rate] unless options[:sampling_rate].nil?
+      values[:fail_open] = false if options[:no_fail_open]
+      Runtime::Policy.new(**values)
+    rescue RuntimeContractError => e
+      raise ConfigurationError, "runtime command policy is invalid: #{e.message}"
+    end
+
+    def runtime_output_directory(override, project)
+      path = if override
+               File.expand_path(override, project.invocation_path)
+             else
+               File.join(project.root, 'tmp', 'fiber-audit-runtime')
+             end
+      Runtime::Environment.prepare_output_directory(path)
+    end
+
+    def load_configuration(project, override)
+      config_path = project.config_path(override)
+      raise ConfigurationError, "configuration file does not exist: #{config_path}" if override && !File.file?(config_path)
+
+      Configuration.load(config_path)
     end
 
     def analyze_project(options, cwd, stderr)

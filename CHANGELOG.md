@@ -8,8 +8,11 @@
   contracts for the future observational runtime auditor.
 - An explicit, bounded, thread-safe runtime session recorder with injected
   clocks and sampling, exact drop accounting, crash-tolerant JSONL writes, and
-  fail-open safety. Process execution and instrumentation are not implemented
-  yet.
+  fail-open safety.
+- `fiber-audit runtime -- COMMAND` with strict activation settings, shell-free
+  process supervision, signal forwarding, status preservation, process-local
+  JSONL sessions, and fork-safe recorder rebinding. Operation instrumentation
+  is not implemented yet.
 
 ## 0.1.0 (2026-08-02)
 

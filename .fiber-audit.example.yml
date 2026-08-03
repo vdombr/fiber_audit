@@ -32,8 +32,8 @@ report:
   # critical, high, medium, low, or info. Default low hides info findings.
   min_severity: low
 
-# Runtime execution is not implemented yet. These values freeze the v0.2 safety
-# contract for the future observational recorder.
+# The opt-in `fiber-audit runtime -- COMMAND` lifecycle recorder uses these
+# safety limits. Targeted operation instrumentation is not implemented yet.
 runtime:
   redaction:
     mode: strict
