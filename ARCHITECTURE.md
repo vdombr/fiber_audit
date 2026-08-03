@@ -22,8 +22,9 @@ A static-only result must never claim an unconditional `PASS`.
 > **Repository status:** the v0.1.0 static pipeline is implemented end to end:
 > project discovery, configuration, semantic and syntax analysis, execution
 > contexts, FA1001–FA1007, suppressions, status derivation, text/JSON reports,
-> and the CLI. The v0.2 runtime event, session, policy, redaction, and JSONL
-> contracts are implemented; recording and instrumentation remain future work.
+> and the CLI. The v0.2 runtime contracts and bounded, thread-safe JSONL
+> session recorder are implemented; process lifecycle and instrumentation remain
+> future work.
 
 ## 2. Scope
 
@@ -615,14 +616,15 @@ Static findings                   Runtime events
        Confirmed / static-only / runtime-only findings
 ```
 
-The foundational runtime contracts are implemented under
+The foundational runtime contracts and recorder are implemented under
 `lib/fiber_audit/runtime/`: immutable event/session values, strict redaction and
-resource policy, and an independently versioned JSONL schema. They perform no
-instrumentation or file I/O.
+resource policy, injected clocks and sampling, bounded JSONL writing, explicit
+drop accounting, and crash-tolerant session recording. Construction is explicit;
+loading the gem performs no instrumentation or file I/O.
 
 Remaining runtime concepts include:
 
-- observational JSONL session recording;
+- explicit command/process lifecycle;
 - scheduler-stall detection;
 - targeted `Module#prepend` instrumentation;
 - limited `TracePoint` use;
@@ -646,7 +648,7 @@ lib/fiber_audit/correlation/fingerprint.rb stable identity
 lib/fiber_audit/suppressions/              suppression parsing and filtering
 lib/fiber_audit/static/                    semantic, call-site, context, rules
 lib/fiber_audit/reporters/                 text and JSON schema 1.0
-lib/fiber_audit/runtime/                    runtime values, safety, JSONL schema
+lib/fiber_audit/runtime/                    runtime values, safety, JSONL recorder
 ARCHITECTURE.md                             supported architecture and boundaries
 ```
 

@@ -5,8 +5,11 @@
 ### Added
 
 - Foundational runtime event, session, safety-policy, redaction, and JSONL
-  contracts for the future observational runtime auditor. Recording and
-  instrumentation are not implemented yet.
+  contracts for the future observational runtime auditor.
+- An explicit, bounded, thread-safe runtime session recorder with injected
+  clocks and sampling, exact drop accounting, crash-tolerant JSONL writes, and
+  fail-open safety. Process execution and instrumentation are not implemented
+  yet.
 
 ## 0.1.0 (2026-08-02)
 

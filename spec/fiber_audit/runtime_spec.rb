@@ -14,7 +14,12 @@ RSpec.describe 'FiberAudit runtime foundation loader' do
         FiberAudit::Runtime::Session,
         FiberAudit::Runtime::SessionSummary,
         FiberAudit::Runtime::Redactor,
+        FiberAudit::Runtime::Clock,
+        FiberAudit::Runtime::Sampler,
+        FiberAudit::Runtime::Limits,
         FiberAudit::Runtime::JSONL::Schema,
+        FiberAudit::Runtime::JSONL::Writer,
+        FiberAudit::Runtime::Recorder,
         FiberAudit::RuntimeContractError,
         FiberAudit::RuntimeSafetyError
       ]
@@ -22,7 +27,7 @@ RSpec.describe 'FiberAudit runtime foundation loader' do
     RUBY
     output, stderr, status = Open3.capture3(RbConfig.ruby, '-Ilib', '-e', script)
     expect(status).to be_success, stderr
-    expect(output.strip).to eq('9')
+    expect(output.strip).to eq('14')
   end
 
   it 'does not load static analysis or framework dependencies' do
