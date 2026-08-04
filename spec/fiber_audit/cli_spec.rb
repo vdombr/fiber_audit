@@ -126,7 +126,8 @@ RSpec.describe FiberAudit::CLI do
         expect(runtime_files(output).size).to eq(2)
         runtime_files(output).each do |path|
           records = File.readlines(path, chomp: true).map { |line| JSON.parse(line) }
-          expect(records.map { |record| record['record_type'] }).to eq(%w[session_start session_end])
+          expect(records.map { |record| record['record_type'] }).to eq(%w[session_start event session_end])
+          expect(records.fetch(1).dig('payload', 'kind')).to eq('watchdog_absent')
           expect(File.stat(path).mode & 0o777).to eq(0o600)
         end
       end
@@ -261,15 +262,22 @@ RSpec.describe FiberAudit::CLI do
       expect(tty_output.string).to start_with("FiberAudit #{FiberAudit::VERSION}")
     end
 
-    it 'applies the command-line minimum severity override without losing runtime policy' do
+    it 'applies the minimum severity override without losing runtime policies' do
       root = File.join(fixtures, 'poro_clean')
       policy = FiberAudit::Runtime::Policy.new(sampling_rate: 0.75)
+      watchdog_policy = FiberAudit::Runtime::WatchdogPolicy.new(max_frames: 3)
       allow(FiberAudit::Configuration).to receive(:load)
-        .and_return(FiberAudit::Configuration.new(runtime_policy: policy))
+        .and_return(
+          FiberAudit::Configuration.new(
+            runtime_policy: policy,
+            runtime_watchdog_policy: watchdog_policy
+          )
+        )
       audit = instance_double(FiberAudit::Audit, call: no_findings_result)
       expect(FiberAudit::Audit).to receive(:new) do |configuration:, root:|
         expect(configuration.min_severity).to eq(:critical)
         expect(configuration.runtime_policy).to equal(policy)
+        expect(configuration.runtime_watchdog_policy).to equal(watchdog_policy)
         expect(root).to eq(File.realpath(File.join(fixtures, 'poro_clean')))
         audit
       end

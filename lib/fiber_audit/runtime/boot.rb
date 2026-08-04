@@ -22,8 +22,12 @@ module FiberAudit
           return unless Environment.activated?(environment)
 
           settings = Environment.load(environment)
+          watchdog_policy = if environment.key?(Environment::WATCHDOG_SETTINGS_KEY)
+                              Environment.load_watchdog_policy(environment)
+                            end
           @lifecycle = Lifecycle.start(
             settings: settings,
+            watchdog_policy: watchdog_policy,
             clock: clock,
             session_id_source: session_id_source,
             pid_source: pid_source,

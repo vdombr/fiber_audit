@@ -7,6 +7,14 @@ require 'fiber_audit/runtime/environment'
 RSpec.describe FiberAudit::Runtime::Environment do
   let(:launch_id) { '123e4567-e89b-42d3-a456-426614174000' }
   let(:policy) { FiberAudit::Runtime::Policy.new(sampling_rate: 0.75) }
+  let(:watchdog_policy) do
+    FiberAudit::Runtime::WatchdogPolicy.new(
+      enabled: true,
+      heartbeat_interval_ms: 20,
+      stall_threshold_ms: 125,
+      max_frames: 7
+    )
+  end
 
   def with_directories
     Dir.mktmpdir do |root|
@@ -38,6 +46,34 @@ RSpec.describe FiberAudit::Runtime::Environment do
       expect(payload.fetch('policy').keys).to eq(described_class::POLICY_KEYS)
       expect(payload.to_s).not_to include('command', 'hostname', 'SECRET')
       expect(encoded).to be_frozen
+    end
+  end
+
+  it 'round-trips strict watchdog settings separately from session settings' do
+    encoded = described_class.dump_watchdog_policy(watchdog_policy)
+    loaded = described_class.load_watchdog_policy(described_class::WATCHDOG_SETTINGS_KEY => encoded)
+    payload = JSON.parse(encoded)
+
+    expect(loaded).to eq(watchdog_policy)
+    expect(payload.keys).to eq(described_class::WATCHDOG_KEYS)
+    expect(payload.to_s).not_to include('command', 'scheduler_class', 'SECRET')
+    expect(encoded).to be_frozen
+    expect(described_class.load_watchdog_policy({})).to equal(FiberAudit::Runtime::WatchdogPolicy::DISABLED)
+  end
+
+  it 'rejects malformed, unknown, and incompatible watchdog settings' do
+    payload = JSON.parse(described_class.dump_watchdog_policy(watchdog_policy))
+    invalid = [
+      'malformed',
+      JSON.generate(payload.merge('command' => 'secret')),
+      JSON.generate(payload.except('max_frames')),
+      JSON.generate(payload.merge('protocol_version' => 99))
+    ]
+
+    invalid.each do |value|
+      expect do
+        described_class.load_watchdog_policy(described_class::WATCHDOG_SETTINGS_KEY => value)
+      end.to raise_error(FiberAudit::RuntimeContractError)
     end
   end
 
@@ -92,12 +128,14 @@ RSpec.describe FiberAudit::Runtime::Environment do
 
       child = described_class.child_environment(
         settings: settings,
+        watchdog_policy: watchdog_policy,
         base_environment: base,
         library_path: library
       )
 
       expect(child.fetch('RUBYOPT')).to eq("#{described_class::BOOT_REQUIRE} -w")
       expect(child.fetch('RUBYLIB')).to eq("#{library}#{File::PATH_SEPARATOR}/existing/lib")
+      expect(described_class.load_watchdog_policy(child)).to eq(watchdog_policy)
       expect(child).not_to have_key('SECRET')
       expect(child).to be_frozen
       expect(base).to eq(original)

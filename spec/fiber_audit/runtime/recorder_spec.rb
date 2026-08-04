@@ -122,6 +122,38 @@ RSpec.describe FiberAudit::Runtime::Recorder do
     expect(recorder.close.sampled_out).to eq(1)
   end
 
+  it 'records control evidence without sampling while retaining normal limits' do
+    policy = FiberAudit::Runtime::Policy.new(
+      sampling_rate: 0.0,
+      max_events_per_session: 1,
+      max_events_per_second: 1
+    )
+    recorder, io = build_recorder(policy: policy, random: -> { 0.99 })
+
+    expect(recorder.record { build_event }).to eq(:sampled_out)
+    expect(recorder.record_control { build_event }).to eq(:emitted)
+    expect(recorder.record_control { build_event }).to eq(:session_event_limited)
+    summary = recorder.close
+
+    expect(summary).to have_attributes(
+      events_observed: 3,
+      events_emitted: 1,
+      sampled_out: 1,
+      session_event_limited: 1
+    )
+    expect(io.string.lines.map { |line| JSON.parse(line)['record_type'] })
+      .to eq(%w[session_start event session_end])
+  end
+
+  it 'accounts bounded external instrumentation errors without retaining data' do
+    recorder, io = build_recorder
+
+    expect(recorder.internal_error!).to be(true)
+    expect(recorder.close.status).to eq(:degraded)
+    expect(recorder.internal_error!).to be(false)
+    expect(io.string).not_to include('exception', 'secret')
+  end
+
   it 'applies the session limit before the rate limit' do
     policy = FiberAudit::Runtime::Policy.new(
       sampling_rate: 1.0,

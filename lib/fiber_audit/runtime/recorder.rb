@@ -10,6 +10,7 @@ require_relative 'session'
 module FiberAudit
   module Runtime
     # Thread-safe coordinator for one bounded append-only runtime session.
+    # rubocop:disable Metrics/ClassLength
     class Recorder
       RESULTS = %i[
         emitted sampled_out rate_limited session_event_limited session_byte_limited
@@ -43,20 +44,24 @@ module FiberAudit
         startup_failure!(e)
       end
 
-      def record
-        raise ArgumentError, 'record requires an event factory block' unless block_given?
+      def record(&factory)
+        record_observation(sample: true, factory: factory)
+      end
 
-        decision = begin_observation
-        return decision unless decision == :selected
+      # Control evidence is never sampled, but still consumes every configured
+      # rate, count, record-size, and session-size budget.
+      def record_control(&factory)
+        record_observation(sample: false, factory: factory)
+      end
 
-        completed = false
-        begin
-          event = yield
-          completed = true
-        ensure
-          release_failed_factory unless completed
+      # Accounts an instrumentation failure without retaining exception data.
+      def internal_error!
+        @mutex.synchronize do
+          return false if @state == :closed
+
+          @limits.internal_error!
+          true
         end
-        finish_observation(event)
       end
 
       def close(status: :completed)
@@ -131,12 +136,28 @@ module FiberAudit
         @state = :disabled
       end
 
-      def begin_observation
+      def record_observation(sample:, factory:)
+        raise ArgumentError, 'record requires an event factory block' unless factory
+
+        decision = begin_observation(sample: sample)
+        return decision unless decision == :selected
+
+        completed = false
+        begin
+          event = factory.call
+          completed = true
+        ensure
+          release_failed_factory unless completed
+        end
+        finish_observation(event)
+      end
+
+      def begin_observation(sample:)
         @mutex.synchronize do
           return :inactive unless @state == :active
 
           @limits.observe!
-          unless @sampler.sample?
+          if sample && !@sampler.sample?
             @limits.drop!(:sampled_out)
             return :sampled_out
           end
@@ -307,5 +328,6 @@ module FiberAudit
         @mutex.synchronize { @state == expected }
       end
     end
+    # rubocop:enable Metrics/ClassLength
   end
 end

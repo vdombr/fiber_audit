@@ -2,15 +2,21 @@
 
 require 'securerandom'
 require_relative 'clock'
+require_relative 'active_operations'
 require_relative 'environment'
 require_relative 'jsonl/writer'
 require_relative 'recorder'
+require_relative 'redactor'
+require_relative 'scheduler_observer'
 require_relative 'session'
+require_relative 'watchdog'
+require_relative 'watchdog_policy'
 
 module FiberAudit
   module Runtime
     class Lifecycle
-      attr_reader :settings, :owner_pid, :output_path, :recorder
+      attr_reader :settings, :owner_pid, :output_path, :recorder,
+                  :watchdog, :active_operations, :watchdog_policy
 
       def self.start(...)
         new(...)
@@ -18,14 +24,16 @@ module FiberAudit
 
       def initialize(
         settings:,
+        watchdog_policy: nil,
         clock: Clock.new,
         session_id_source: SecureRandom.method(:uuid),
         pid_source: Process.method(:pid),
         writer_factory: JSONL::Writer.method(:open),
         random: Sampler::RANDOM_SOURCE
       )
-        validate_dependencies!(settings, clock, session_id_source, pid_source, writer_factory, random)
+        validate_dependencies!(settings, watchdog_policy, clock, session_id_source, pid_source, writer_factory, random)
         @settings = settings
+        @watchdog_policy = watchdog_policy
         @clock = clock
         @session_id_source = session_id_source
         @pid_source = pid_source
@@ -35,6 +43,9 @@ module FiberAudit
         @state = :starting
         @output_path = nil
         @recorder = nil
+        @watchdog = nil
+        @scheduler_observer = nil
+        @active_operations = nil
         start_process_session!
       rescue StandardError => e
         startup_failure!(e)
@@ -56,10 +67,13 @@ module FiberAudit
         pid = current_pid
         return self if pid == owner_pid
 
-        abandon_inherited_writer!
+        abandon_inherited_runtime!
         @owner_pid = pid
         @output_path = nil
         @recorder = nil
+        @watchdog = nil
+        @scheduler_observer = nil
+        @active_operations = nil
         @state = :starting
         start_process_session!
         self
@@ -71,8 +85,12 @@ module FiberAudit
         ensure_current_process!
         return @summary if closed?
 
-        @summary = recorder&.close(status: shutdown_status(exception))
+        watchdog_error = stop_watchdog
+        status = watchdog_error && exception.nil? ? :degraded : shutdown_status(exception)
+        @summary = recorder&.close(status: status)
         @state = :closed
+        raise watchdog_error if watchdog_error && !settings.policy.fail_open?
+
         @summary
       rescue StandardError => e
         @state = :closed
@@ -83,9 +101,12 @@ module FiberAudit
 
       private
 
-      def validate_dependencies!(candidate_settings, candidate_clock, session_ids, pids, writers, random)
+      def validate_dependencies!(candidate_settings, watchdog, candidate_clock, session_ids, pids, writers, random)
         unless candidate_settings.is_a?(Environment::Settings)
           raise RuntimeContractError, 'settings must be FiberAudit::Runtime::Environment::Settings'
+        end
+        unless watchdog.nil? || watchdog.is_a?(WatchdogPolicy)
+          raise RuntimeContractError, 'watchdog_policy must be a FiberAudit::Runtime::WatchdogPolicy or nil'
         end
         raise RuntimeContractError, 'clock must be a FiberAudit::Runtime::Clock' unless candidate_clock.is_a?(Clock)
 
@@ -112,6 +133,7 @@ module FiberAudit
         )
         writer = @writer_factory.call(path: output_path, max_record_bytes: settings.policy.max_record_bytes)
         @recorder = start_recorder(session, writer)
+        setup_runtime_observers! if recorder.active?
         @state = recorder.active? ? :active : :disabled
       end
 
@@ -126,6 +148,32 @@ module FiberAudit
         raise
       end
 
+      def setup_runtime_observers!
+        @active_operations = ActiveOperations.new(pid_source: @pid_source)
+        return unless watchdog_policy
+
+        @watchdog = Watchdog.new(
+          policy: watchdog_policy,
+          recorder: recorder,
+          redactor: Redactor.new(root: settings.project_root, policy: settings.policy),
+          active_operations: active_operations,
+          clock: @clock
+        )
+        @scheduler_observer = SchedulerObserver.activate(watchdog: watchdog) if watchdog.enabled?
+      rescue StandardError => e
+        recorder.internal_error!
+        @watchdog = nil
+        @scheduler_observer = nil
+        unless settings.policy.fail_open?
+          begin
+            recorder.close(status: :degraded)
+          rescue StandardError
+            nil
+          end
+          raise e
+        end
+      end
+
       def build_output_path(session_id)
         unless session_id.is_a?(String) && session_id.match?(Validation::UUID)
           raise RuntimeContractError, 'session ID source must return a canonical lowercase UUID'
@@ -135,10 +183,27 @@ module FiberAudit
         File.join(settings.output_directory, filename).freeze
       end
 
-      def abandon_inherited_writer!
+      def abandon_inherited_runtime!
         recorder&.writer&.close
       ensure
         @recorder = nil
+        @watchdog = nil
+        @scheduler_observer = nil
+        @active_operations = nil
+      end
+
+      def stop_watchdog
+        error = nil
+        begin
+          SchedulerObserver.deactivate(@scheduler_observer) if @scheduler_observer
+          watchdog&.stop
+        rescue StandardError => e
+          recorder&.internal_error!
+          error = e
+        ensure
+          @scheduler_observer = nil
+        end
+        error
       end
 
       def startup_failure!(error)

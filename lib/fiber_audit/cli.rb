@@ -98,7 +98,10 @@ module FiberAudit
         output_directory: output_directory,
         project_root: project.root
       )
-      environment = Runtime::Environment.child_environment(settings: settings)
+      environment = Runtime::Environment.child_environment(
+        settings: settings,
+        watchdog_policy: configuration.runtime_watchdog_policy
+      )
       Runtime::Supervisor.new(
         command: command,
         environment: environment,
@@ -197,7 +200,8 @@ module FiberAudit
         report_formats: configuration.report_formats,
         min_severity: severity,
         suppressions_path: configuration.suppressions_path,
-        runtime_policy: configuration.runtime_policy
+        runtime_policy: configuration.runtime_policy,
+        runtime_watchdog_policy: configuration.runtime_watchdog_policy
       )
     end
 

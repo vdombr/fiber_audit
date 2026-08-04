@@ -678,6 +678,64 @@ RSpec.describe FiberAudit::Configuration do
     end
   end
 
+  describe 'runtime watchdog configuration' do
+    it 'uses the frozen watchdog defaults' do
+      expect(described_class.new.runtime_watchdog_policy.to_h).to eq(
+        enabled: true,
+        heartbeat_interval_ms: 25,
+        stall_threshold_ms: 100,
+        max_frames: 20
+      )
+    end
+
+    it 'loads the complete strict watchdog policy' do
+      yaml = {
+        'runtime' => {
+          'watchdog' => {
+            'enabled' => false,
+            'heartbeat_interval_ms' => 50,
+            'stall_threshold_ms' => 250,
+            'max_frames' => 8
+          }
+        }
+      }
+
+      with_configuration(yaml) do |config|
+        expect(config.runtime_watchdog_policy.to_h).to eq(
+          enabled: false,
+          heartbeat_interval_ms: 50,
+          stall_threshold_ms: 250,
+          max_frames: 8
+        )
+      end
+    end
+
+    it 'rejects non-mapping, unknown, and invalid watchdog settings' do
+      expect { with_configuration('runtime' => { 'watchdog' => [] }) { nil } }
+        .to raise_error(FiberAudit::ConfigurationError, /runtime\.watchdog must be a mapping/)
+      expect do
+        with_configuration('runtime' => { 'watchdog' => { 'payload' => true } }) { nil }
+      end.to raise_error(FiberAudit::ConfigurationError, /unknown configuration key 'payload'/)
+      expect do
+        with_configuration('runtime' => { 'watchdog' => { 'stall_threshold_ms' => 0 } }) { nil }
+      end.to raise_error(FiberAudit::ConfigurationError, /runtime\.watchdog\.stall_threshold_ms is invalid/)
+    end
+
+    it 'rejects a non-watchdog policy passed directly' do
+      expect { described_class.new(runtime_watchdog_policy: {}) }
+        .to raise_error(FiberAudit::ConfigurationError, /runtime_watchdog_policy/)
+    end
+
+    it 'loads the watchdog dependency standalone' do
+      output, stderr, status = Open3.capture3(
+        RbConfig.ruby, '-Ilib', '-rfiber_audit/configuration',
+        '-e', 'puts FiberAudit::Configuration.new.runtime_watchdog_policy.class'
+      )
+      expect(status).to be_success, stderr
+      expect(output.strip).to eq('FiberAudit::Runtime::WatchdogPolicy')
+    end
+  end
+
   describe 'Configuration.load severity coercion' do
     it 'does not call to_sym on arbitrary YAML min_severity' do
       yaml_content = {

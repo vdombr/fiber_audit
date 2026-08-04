@@ -23,8 +23,8 @@ A static-only result must never claim an unconditional `PASS`.
 > project discovery, configuration, semantic and syntax analysis, execution
 > contexts, FA1001–FA1007, suppressions, status derivation, text/JSON reports,
 > and the CLI. The v0.2 runtime contracts, bounded JSONL recorder, explicit
-> child-process boot, lifecycle, and supervising command are implemented;
-> scheduler monitoring and operation probes remain future work.
+> child-process boot, lifecycle, supervising command, and bounded scheduler
+> watchdog are implemented; targeted operation probes remain future work.
 
 ## 2. Scope
 
@@ -622,12 +622,34 @@ resource policy, injected clocks and sampling, bounded JSONL writing, explicit
 drop accounting, and crash-tolerant session recording. The explicit `runtime`
 command supervises a user-supplied command, injects a conditional Ruby boot,
 forwards signals, preserves child status, and creates a distinct session for each
-observed Ruby process. Loading the gem normally performs no instrumentation or
-file I/O.
+observed Ruby process.
+
+Explicit runtime boot also installs a narrow observer for schedulers configured
+through `Fiber.set_scheduler`. A scheduler-owned heartbeat fiber updates
+monotonic progress; one process-local watchdog thread detects threshold crossings.
+Each stall emits at most one start and one completion event plus a configured,
+bounded set of project-relative frame events. An active-operation registry uses
+only ephemeral thread/fiber identities and process-local sequences, ready for
+targeted probes without retaining arguments or request identifiers.
+
+Watchdog state is explicit: disabled, absent, active, or unsupported. State and
+stall events bypass random sampling but still consume all recorder rate, event,
+record, and session limits. Runtime JSONL schema `1.0` and its `session_start`
+contract remain unchanged; watchdog policy travels only in strict activation
+settings, while state and policy measurements are ordinary bounded events.
+Shutdown first makes scheduler callbacks inert, requests heartbeat/watchdog stop,
+bounds and joins the watchdog thread, completes any open stall, and only then
+closes the recorder. Fork rebinding discards inherited watchdog references before
+touching their locks and creates process-local replacements.
+
+Loading the gem normally performs no instrumentation, fibers, threads, or file
+I/O. The observer is activated only by explicit runtime boot. A native operation
+that retains Ruby's GVL can prevent the watchdog thread from running until the
+operation returns; absence or unsupported monitoring and absence of stalls are
+never clean certification.
 
 Remaining runtime concepts include:
 
-- scheduler-stall detection;
 - targeted `Module#prepend` instrumentation;
 - limited `TracePoint` use;
 - Rails request and callback correlation;
@@ -650,7 +672,7 @@ lib/fiber_audit/correlation/fingerprint.rb stable identity
 lib/fiber_audit/suppressions/              suppression parsing and filtering
 lib/fiber_audit/static/                    semantic, call-site, context, rules
 lib/fiber_audit/reporters/                 text and JSON schema 1.0
-lib/fiber_audit/runtime/                    runtime values, safety, JSONL recorder
+lib/fiber_audit/runtime/                    values, recorder, lifecycle, watchdog
 ARCHITECTURE.md                             supported architecture and boundaries
 ```
 

@@ -5,18 +5,23 @@ require 'pathname'
 require_relative 'errors'
 require_relative 'findings/severity'
 require_relative 'runtime/policy'
+require_relative 'runtime/watchdog_policy'
 
 module FiberAudit
+  # rubocop:disable Metrics/ClassLength
   class Configuration
     KNOWN_TOP_LEVEL_KEYS = %w[static rules report runtime].freeze
     KNOWN_STATIC_KEYS = %w[include exclude suppressions_path].freeze
     KNOWN_REPORT_KEYS = %w[formats min_severity].freeze
     KNOWN_RULE_KEYS = %w[enabled severity].freeze
-    KNOWN_RUNTIME_KEYS = %w[redaction sampling overhead fail_open].freeze
+    KNOWN_RUNTIME_KEYS = %w[redaction sampling overhead watchdog fail_open].freeze
     KNOWN_REDACTION_KEYS = %w[mode].freeze
     KNOWN_SAMPLING_KEYS = %w[rate].freeze
     KNOWN_OVERHEAD_KEYS = %w[
       max_events_per_second max_events_per_session max_record_bytes max_session_bytes
+    ].freeze
+    KNOWN_WATCHDOG_KEYS = %w[
+      enabled heartbeat_interval_ms stall_threshold_ms max_frames
     ].freeze
     RUNTIME_POLICY_PATHS = {
       'redaction' => 'runtime.redaction.mode',
@@ -45,7 +50,7 @@ module FiberAudit
 
     attr_reader :static_include, :static_exclude, :rules_config,
                 :report_formats, :min_severity, :suppressions_path,
-                :runtime_policy
+                :runtime_policy, :runtime_watchdog_policy
 
     def initialize(
       static_include: DEFAULT_STATIC_INCLUDE,
@@ -54,11 +59,13 @@ module FiberAudit
       report_formats: %w[text],
       min_severity: :low,
       suppressions_path: nil,
-      runtime_policy: Runtime::Policy.new
+      runtime_policy: Runtime::Policy.new,
+      runtime_watchdog_policy: Runtime::WatchdogPolicy.new
     )
       validate_types!(
         static_include, static_exclude, rules_config,
-        report_formats, min_severity, suppressions_path, runtime_policy
+        report_formats, min_severity, suppressions_path, runtime_policy,
+        runtime_watchdog_policy
       )
 
       @static_include = static_include
@@ -68,6 +75,7 @@ module FiberAudit
       @min_severity = coerce_severity(min_severity, 'report.min_severity')
       @suppressions_path = suppressions_path
       @runtime_policy = runtime_policy
+      @runtime_watchdog_policy = runtime_watchdog_policy
     end
 
     def rule_enabled?(rule_id)
@@ -104,7 +112,8 @@ module FiberAudit
           report_formats: report['formats'] || %w[text],
           min_severity: report.fetch('min_severity', :low),
           suppressions_path: static['suppressions_path'],
-          runtime_policy: runtime_policy_from(runtime)
+          runtime_policy: runtime_policy_from(runtime),
+          runtime_watchdog_policy: runtime_watchdog_policy_from(runtime)
         )
       end
 
@@ -156,6 +165,7 @@ module FiberAudit
         validate_runtime_mapping!(runtime, 'redaction', KNOWN_REDACTION_KEYS)
         validate_runtime_mapping!(runtime, 'sampling', KNOWN_SAMPLING_KEYS)
         validate_runtime_mapping!(runtime, 'overhead', KNOWN_OVERHEAD_KEYS)
+        validate_runtime_mapping!(runtime, 'watchdog', KNOWN_WATCHDOG_KEYS)
       end
 
       def validate_runtime_mapping!(runtime, key, allowed)
@@ -189,6 +199,21 @@ module FiberAudit
         raise ConfigurationError, "#{path} is invalid: #{e.message}"
       end
 
+      def runtime_watchdog_policy_from(runtime)
+        values = runtime.fetch('watchdog', {})
+        defaults = Runtime::WatchdogPolicy::DEFAULTS
+        Runtime::WatchdogPolicy.new(
+          enabled: values.fetch('enabled', defaults[:enabled]),
+          heartbeat_interval_ms: values.fetch('heartbeat_interval_ms', defaults[:heartbeat_interval_ms]),
+          stall_threshold_ms: values.fetch('stall_threshold_ms', defaults[:stall_threshold_ms]),
+          max_frames: values.fetch('max_frames', defaults[:max_frames])
+        )
+      rescue RuntimeContractError => e
+        field = e.message.split.first
+        path = field == 'enabled' ? 'runtime.watchdog.enabled' : "runtime.watchdog.#{field}"
+        raise ConfigurationError, "#{path} is invalid: #{e.message}"
+      end
+
       def check_unknown_keys(hash, allowed, path)
         unknown = hash.keys - allowed
         return if unknown.empty?
@@ -204,7 +229,7 @@ module FiberAudit
 
     def validate_types!(
       include_patterns, exclude_patterns, rules,
-      formats, _severity, suppressions, runtime_policy
+      formats, _severity, suppressions, runtime_policy, watchdog_policy
     )
       unless include_patterns.is_a?(Array) &&
              include_patterns.all?(String)
@@ -226,6 +251,10 @@ module FiberAudit
       unless runtime_policy.is_a?(Runtime::Policy)
         raise ConfigurationError,
               'runtime_policy must be a FiberAudit::Runtime::Policy'
+      end
+      unless watchdog_policy.is_a?(Runtime::WatchdogPolicy)
+        raise ConfigurationError,
+              'runtime_watchdog_policy must be a FiberAudit::Runtime::WatchdogPolicy'
       end
 
       return if suppressions.nil? || suppressions.is_a?(String)
@@ -303,4 +332,5 @@ module FiberAudit
             "#{path} is not a valid severity: #{value.inspect}"
     end
   end
+  # rubocop:enable Metrics/ClassLength
 end

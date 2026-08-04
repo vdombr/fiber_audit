@@ -11,8 +11,11 @@
   fail-open safety.
 - `fiber-audit runtime -- COMMAND` with strict activation settings, shell-free
   process supervision, signal forwarding, status preservation, process-local
-  JSONL sessions, and fork-safe recorder rebinding. Operation instrumentation
-  is not implemented yet.
+  JSONL sessions, and fork-safe recorder rebinding.
+- An opt-in scheduler watchdog with explicit disabled/absent/active/unsupported
+  states, scheduler-owned monotonic heartbeats, one bounded start/completion pair
+  per stall, privacy-safe project frame evidence, and a process-local active
+  operation registry. Operation-specific probes are not implemented yet.
 
 ## 0.1.0 (2026-08-02)
 

@@ -74,6 +74,28 @@ RSpec.describe FiberAudit::Runtime::Lifecycle do
     end
   end
 
+  it 'owns explicit watchdog state and a process-local active-operation registry' do
+    with_runtime do |root, output|
+      streams = {}
+      lifecycle = described_class.start(
+        settings: build_settings(root: root, output: output),
+        watchdog_policy: FiberAudit::Runtime::WatchdogPolicy.new,
+        clock: build_clock,
+        session_id_source: -> { session_ids.first },
+        pid_source: -> { 4500 },
+        writer_factory: memory_writer_factory(streams)
+      )
+
+      expect(lifecycle.watchdog.state).to eq(:absent)
+      expect(lifecycle.active_operations).to be_a(FiberAudit::Runtime::ActiveOperations)
+      lifecycle.shutdown
+      records = streams.fetch(lifecycle.output_path).string.lines.map { |line| JSON.parse(line) }
+
+      expect(records.map { |record| record['record_type'] }).to eq(%w[session_start event session_end])
+      expect(records.fetch(1).dig('payload', 'kind')).to eq('watchdog_absent')
+    end
+  end
+
   it 'maps orderly SystemExit to completed and unhandled failures to aborted' do
     with_runtime do |root, output|
       [
@@ -128,6 +150,32 @@ RSpec.describe FiberAudit::Runtime::Lifecycle do
     end
   end
 
+  it 'rebuilds watchdog and operation state without locking inherited objects after a PID change' do
+    with_runtime do |root, output|
+      streams = {}
+      ids = session_ids.dup
+      pid = 6500
+      lifecycle = described_class.start(
+        settings: build_settings(root: root, output: output),
+        watchdog_policy: FiberAudit::Runtime::WatchdogPolicy.new,
+        clock: build_clock,
+        session_id_source: -> { ids.shift },
+        pid_source: -> { pid },
+        writer_factory: memory_writer_factory(streams)
+      )
+      parent_watchdog = lifecycle.watchdog
+      parent_operations = lifecycle.active_operations
+      pid = 6501
+
+      lifecycle.ensure_current_process!
+
+      expect(lifecycle.watchdog).not_to equal(parent_watchdog)
+      expect(lifecycle.active_operations).not_to equal(parent_operations)
+      expect(lifecycle.owner_pid).to eq(6501)
+      lifecycle.shutdown
+    end
+  end
+
   it 'disables startup failures in fail-open mode and propagates them in fail-closed mode' do
     with_runtime do |root, output|
       error = IOError.new('disk unavailable')
@@ -152,6 +200,45 @@ RSpec.describe FiberAudit::Runtime::Lifecycle do
           writer_factory: failing_factory
         )
       end.to raise_error(error)
+    end
+  end
+
+  it 'degrades fail-open watchdog startup and closes fail-closed startup sessions' do
+    with_runtime do |root, output|
+      error = IOError.new('watchdog clock failed')
+      [true, false].each_with_index do |fail_open, index|
+        streams = {}
+        monotonic_calls = 0
+        clock = FiberAudit::Runtime::Clock.new(
+          wall: -> { Time.utc(2026, 8, 2, 12) },
+          monotonic: lambda do
+            monotonic_calls += 1
+            raise error if monotonic_calls > 1
+
+            100
+          end
+        )
+        arguments = {
+          settings: build_settings(root: root, output: output, fail_open: fail_open),
+          watchdog_policy: FiberAudit::Runtime::WatchdogPolicy.new,
+          clock: clock,
+          session_id_source: -> { session_ids.fetch(index) },
+          pid_source: -> { 9000 + index },
+          writer_factory: memory_writer_factory(streams)
+        }
+
+        if fail_open
+          lifecycle = described_class.start(**arguments)
+          expect(lifecycle.watchdog).to be_nil
+          expect(lifecycle.shutdown.status).to eq(:degraded)
+        else
+          expect { described_class.start(**arguments) }.to raise_error(error)
+        end
+
+        records = streams.values.first.string.lines.map { |line| JSON.parse(line) }
+        expect(records.first['record_type']).to eq('session_start')
+        expect(records.last['record_type']).to eq('session_end') unless fail_open
+      end
     end
   end
 

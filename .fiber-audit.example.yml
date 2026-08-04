@@ -32,8 +32,8 @@ report:
   # critical, high, medium, low, or info. Default low hides info findings.
   min_severity: low
 
-# The opt-in `fiber-audit runtime -- COMMAND` lifecycle recorder uses these
-# safety limits. Targeted operation instrumentation is not implemented yet.
+# The opt-in `fiber-audit runtime -- COMMAND` recorder and scheduler watchdog
+# use these limits. Targeted operation probes are not implemented yet.
 runtime:
   redaction:
     mode: strict
@@ -44,4 +44,9 @@ runtime:
     max_events_per_session: 10000
     max_record_bytes: 16384
     max_session_bytes: 10485760
+  watchdog:
+    enabled: true
+    heartbeat_interval_ms: 25
+    stall_threshold_ms: 100
+    max_frames: 20
   fail_open: true

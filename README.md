@@ -35,6 +35,8 @@ file exists.
 ```text
 fiber-audit static [--format text|json] [--config PATH] [--out PATH]
                    [--min-severity LEVEL] [--no-color]
+fiber-audit runtime [--config PATH] [--out DIRECTORY]
+                    [--sampling-rate RATE] [--no-fail-open] -- COMMAND [ARGUMENTS...]
 fiber-audit list-rules
 fiber-audit explain FA1001
 fiber-audit version
@@ -57,6 +59,30 @@ Explicit `--format` always wins.
 | FA1007 | Synchronous HTTP in request-like contexts | high |
 
 Use `fiber-audit explain <RULE_ID>` for exact targets and remediation.
+
+## Runtime watchdog (unreleased v0.2 work)
+
+The explicit runtime command observes only a command supplied after `--`; it
+never executes source fragments discovered by static analysis:
+
+```sh
+fiber-audit runtime -- bundle exec rspec
+```
+
+Each observed Ruby process writes a separate owner-only JSONL session under
+`tmp/fiber-audit-runtime` by default. The scheduler watchdog records one bounded
+start/completion pair when its scheduler-owned heartbeat stops progressing past
+the configured threshold. Scheduler-friendly waits should continue heartbeats.
+A session also records an explicit watchdog state:
+
+- `watchdog_active` — a heartbeat ran under an installed scheduler;
+- `watchdog_absent` — no scheduler was observed;
+- `watchdog_unsupported` — a scheduler could not safely host the heartbeat;
+- `watchdog_disabled` — watchdog policy disabled observation.
+
+Absent or unsupported monitoring, a clean session, and absence of stall events
+are **not** proof of fiber safety. Native work that holds Ruby's GVL can also
+prevent the watchdog thread from running until that work returns.
 
 ## Configuration
 
@@ -85,6 +111,18 @@ rules:
 report:
   formats: [text, json]
   min_severity: low
+
+runtime:
+  redaction:
+    mode: strict
+  sampling:
+    rate: 0.1
+  watchdog:
+    enabled: true
+    heartbeat_interval_ms: 25
+    stall_threshold_ms: 100
+    max_frames: 20
+  fail_open: true
 ```
 
 `--min-severity` overrides `report.min_severity` for one run. Severity ordering

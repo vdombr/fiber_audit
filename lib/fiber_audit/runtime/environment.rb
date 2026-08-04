@@ -6,6 +6,7 @@ require 'pathname'
 require 'securerandom'
 require_relative 'policy'
 require_relative 'validation'
+require_relative 'watchdog_policy'
 
 module FiberAudit
   module Runtime
@@ -15,12 +16,17 @@ module FiberAudit
       ACTIVATION_KEY = 'FIBER_AUDIT_RUNTIME_BOOT'
       SETTINGS_KEY = 'FIBER_AUDIT_RUNTIME_SETTINGS'
       FAILURE_MODE_KEY = 'FIBER_AUDIT_RUNTIME_FAILURE_MODE'
+      WATCHDOG_SETTINGS_KEY = 'FIBER_AUDIT_RUNTIME_WATCHDOG_SETTINGS'
       BOOT_REQUIRE = '-rfiber_audit/runtime/boot'
       MAX_SETTINGS_BYTES = 16_384
+      MAX_WATCHDOG_SETTINGS_BYTES = 1_024
       SETTINGS_KEYS = %w[protocol_version launch_id project_root output_directory policy].freeze
       POLICY_KEYS = %w[
         redaction sampling_rate max_events_per_second max_events_per_session
         max_record_bytes max_session_bytes fail_open
+      ].freeze
+      WATCHDOG_KEYS = %w[
+        protocol_version enabled heartbeat_interval_ms stall_threshold_ms max_frames
       ].freeze
 
       Settings = Data.define(:protocol_version, :launch_id, :project_root, :output_directory, :policy) do
@@ -99,6 +105,46 @@ module FiberAudit
         raise RuntimeContractError, "invalid runtime activation settings: #{e.message}"
       end
 
+      def dump_watchdog_policy(policy)
+        require_watchdog_policy!(policy)
+        payload = {
+          'protocol_version' => PROTOCOL_VERSION,
+          'enabled' => policy.enabled,
+          'heartbeat_interval_ms' => policy.heartbeat_interval_ms,
+          'stall_threshold_ms' => policy.stall_threshold_ms,
+          'max_frames' => policy.max_frames
+        }
+        encoded = JSON.generate(payload)
+        if encoded.bytesize > MAX_WATCHDOG_SETTINGS_BYTES
+          raise RuntimeSafetyError, 'runtime watchdog activation settings are too large'
+        end
+
+        encoded.freeze
+      end
+
+      def load_watchdog_policy(environment = ENV)
+        value = environment[WATCHDOG_SETTINGS_KEY]
+        return WatchdogPolicy::DISABLED if value.nil?
+        unless value.is_a?(String) && value.valid_encoding? && value.bytesize <= MAX_WATCHDOG_SETTINGS_BYTES
+          raise RuntimeContractError, 'runtime watchdog activation settings are invalid'
+        end
+
+        payload = JSON.parse(value)
+        require_exact_keys!(payload, WATCHDOG_KEYS, 'runtime watchdog activation settings')
+        unless payload.fetch('protocol_version') == PROTOCOL_VERSION
+          raise RuntimeContractError, "runtime watchdog activation protocol must be #{PROTOCOL_VERSION}"
+        end
+
+        WatchdogPolicy.new(
+          enabled: payload.fetch('enabled'),
+          heartbeat_interval_ms: payload.fetch('heartbeat_interval_ms'),
+          stall_threshold_ms: payload.fetch('stall_threshold_ms'),
+          max_frames: payload.fetch('max_frames')
+        )
+      rescue JSON::ParserError, ArgumentError => e
+        raise RuntimeContractError, "invalid runtime watchdog activation settings: #{e.message}"
+      end
+
       def activated?(environment = ENV)
         marker = environment[ACTIVATION_KEY]
         return false if marker.nil?
@@ -115,17 +161,25 @@ module FiberAudit
         raise RuntimeContractError, "#{FAILURE_MODE_KEY} must be open or closed"
       end
 
-      def child_environment(settings:, base_environment: ENV, library_path: default_library_path)
+      def child_environment(
+        settings:,
+        watchdog_policy: nil,
+        base_environment: ENV,
+        library_path: default_library_path
+      )
         require_settings!(settings)
+        require_watchdog_policy!(watchdog_policy) if watchdog_policy
         raise RuntimeContractError, 'base_environment must be a Hash-like object' unless base_environment.respond_to?(:[])
 
-        {
+        environment = {
           ACTIVATION_KEY => '1',
           SETTINGS_KEY => dump(settings),
           FAILURE_MODE_KEY => settings.policy.fail_open? ? 'open' : 'closed',
           'RUBYOPT' => prepend_token(base_environment['RUBYOPT'], BOOT_REQUIRE, separator: ' '),
           'RUBYLIB' => prepend_token(base_environment['RUBYLIB'], library_path, separator: File::PATH_SEPARATOR)
-        }.transform_values(&:freeze).freeze
+        }
+        environment[WATCHDOG_SETTINGS_KEY] = dump_watchdog_policy(watchdog_policy) if watchdog_policy
+        environment.transform_values(&:freeze).freeze
       end
 
       def prepare_output_directory(path)
@@ -181,6 +235,13 @@ module FiberAudit
         raise RuntimeContractError, 'settings must be FiberAudit::Runtime::Environment::Settings'
       end
       private_class_method :require_settings!
+
+      def require_watchdog_policy!(value)
+        return if value.is_a?(WatchdogPolicy)
+
+        raise RuntimeContractError, 'watchdog_policy must be FiberAudit::Runtime::WatchdogPolicy'
+      end
+      private_class_method :require_watchdog_policy!
 
       def require_exact_keys!(value, expected, path)
         raise RuntimeContractError, "#{path} must be an object" unless value.is_a?(Hash)
