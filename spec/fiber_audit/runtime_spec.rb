@@ -26,6 +26,15 @@ RSpec.describe 'FiberAudit runtime foundation loader' do
         FiberAudit::Runtime::Heartbeat,
         FiberAudit::Runtime::Watchdog,
         FiberAudit::Runtime::SchedulerObserver,
+        FiberAudit::Runtime::Probes::Base,
+        FiberAudit::Runtime::Probes::Registry,
+        FiberAudit::Runtime::Probes::Subprocess,
+        FiberAudit::Runtime::Probes::ThreadWait,
+        FiberAudit::Runtime::Probes::Synchronization,
+        FiberAudit::Runtime::Probes::ThreadState,
+        FiberAudit::Runtime::Probes::IOSelect,
+        FiberAudit::Runtime::Probes::Socket,
+        FiberAudit::Runtime::Probes::HTTP,
         FiberAudit::Runtime::Lifecycle,
         FiberAudit::Runtime::Supervisor,
         FiberAudit::RuntimeContractError,
@@ -35,7 +44,7 @@ RSpec.describe 'FiberAudit runtime foundation loader' do
     RUBY
     output, stderr, status = Open3.capture3(RbConfig.ruby, '-Ilib', '-e', script)
     expect(status).to be_success, stderr
-    expect(output.strip).to eq('22')
+    expect(output.strip).to eq('31')
   end
 
   it 'does not load static analysis or framework dependencies' do
@@ -46,12 +55,14 @@ RSpec.describe 'FiberAudit runtime foundation loader' do
       puts prohibited.any? { |name| Object.const_defined?(name, false) }
       puts defined?(FiberAudit::Static).nil?
       puts defined?(FiberAudit::Runtime::Boot).nil?
-      puts defined?(FiberAudit::Runtime::Probes).nil?
+      puts !defined?(FiberAudit::Runtime::Probes).nil?
       puts !Fiber.singleton_class.ancestors.include?(FiberAudit::Runtime::SchedulerObserver::FiberHook)
+      puts !Kernel.ancestors.include?(FiberAudit::Runtime::Probes::Registry::RequireInstanceHook)
+      puts !Mutex.ancestors.include?(FiberAudit::Runtime::Probes::Synchronization::MutexHook)
       puts Thread.list.size == thread_count
     RUBY
     output, stderr, status = Open3.capture3(RbConfig.ruby, '-Ilib', '-e', script)
     expect(status).to be_success, stderr
-    expect(output.lines.map(&:strip)).to eq(%w[false true true true true true])
+    expect(output.lines.map(&:strip)).to eq(%w[false true true true true true true true])
   end
 end

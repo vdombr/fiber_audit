@@ -4,6 +4,7 @@ require_relative 'base'
 require_relative '../../findings/evidence'
 require_relative '../../correlation/fingerprint'
 require_relative '../../findings/finding'
+require_relative '../../operation_vocabulary'
 
 module FiberAudit
   module Static
@@ -20,8 +21,8 @@ module FiberAudit
         MESSAGE = 'Thread-local state may be shared across fibers and leak request-local data.'
         REMEDIATION = 'Use fiber-local or framework-provided request-local state instead of Thread thread variables.'
 
-        THREAD_VARIABLE_METHODS = %i[thread_variable_get thread_variable_set].freeze
-        INDEX_METHODS = %i[[] []=].freeze
+        THREAD_VARIABLE_METHODS = OperationVocabulary::FA1004_THREAD_VARIABLE_METHODS
+        INDEX_METHODS = OperationVocabulary::FA1004_INDEX_METHODS
 
         def analyze(call_sites:)
           findings = []

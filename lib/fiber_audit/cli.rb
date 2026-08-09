@@ -100,7 +100,8 @@ module FiberAudit
       )
       environment = Runtime::Environment.child_environment(
         settings: settings,
-        watchdog_policy: configuration.runtime_watchdog_policy
+        watchdog_policy: configuration.runtime_watchdog_policy,
+        probes_enabled: true
       )
       Runtime::Supervisor.new(
         command: command,

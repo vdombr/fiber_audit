@@ -32,8 +32,8 @@ report:
   # critical, high, medium, low, or info. Default low hides info findings.
   min_severity: low
 
-# The opt-in `fiber-audit runtime -- COMMAND` recorder and scheduler watchdog
-# use these limits. Targeted operation probes are not implemented yet.
+# The opt-in `fiber-audit runtime -- COMMAND` recorder, targeted operation
+# probes, and scheduler watchdog use these limits.
 runtime:
   redaction:
     mode: strict

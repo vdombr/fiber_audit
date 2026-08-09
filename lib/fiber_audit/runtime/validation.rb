@@ -9,6 +9,7 @@ module FiberAudit
       UUID = /\A[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\z/
       CONTROL = /[[:cntrl:]]/
       OPERATION = /\A(?:::)?[A-Z][A-Za-z0-9_]*(?:::[A-Z][A-Za-z0-9_]*)*(?:[.#](?:[a-zA-Z_][a-zA-Z0-9_]*[!?=]?|\[\]=?))\z/
+      SPECIAL_OPERATIONS = %w[Thread.current.[] Thread.current.[]=].freeze
 
       module_function
 
@@ -35,7 +36,7 @@ module FiberAudit
         return if value.nil? && allow_nil
 
         normalized = string(value, 'operation', max_bytes: 256)
-        unless normalized == '[redacted]' || normalized.match?(OPERATION)
+        unless normalized == '[redacted]' || SPECIAL_OPERATIONS.include?(normalized) || normalized.match?(OPERATION)
           raise RuntimeContractError, 'operation must be canonical or redacted'
         end
 

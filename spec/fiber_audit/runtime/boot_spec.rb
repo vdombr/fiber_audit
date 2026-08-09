@@ -9,17 +9,18 @@ require 'fiber_audit/runtime/environment'
 RSpec.describe 'FiberAudit runtime boot' do
   let(:launch_id) { '123e4567-e89b-42d3-a456-426614174000' }
 
-  def activation_environment(root, output, fail_open: true, watchdog: nil)
+  def activation_environment(root, output, fail_open: true, watchdog: nil, probes: false)
     policy = FiberAudit::Runtime::Policy.new(sampling_rate: 1.0, fail_open: fail_open)
     settings = FiberAudit::Runtime::Environment.build(
       policy: policy,
       output_directory: output,
-      project_root: root,
+      project_root: File.realpath(root),
       launch_id: launch_id
     )
     FiberAudit::Runtime::Environment.child_environment(
       settings: settings,
-      watchdog_policy: watchdog
+      watchdog_policy: watchdog,
+      probes_enabled: probes
     )
   end
 
@@ -247,6 +248,58 @@ RSpec.describe 'FiberAudit runtime boot' do
       end
       expect(frame_paths.size).to be <= 5
       expect(frame_paths).to all(eq('scenario.rb'))
+    end
+  end
+
+  it 'records targeted project operations with late loading and no sensitive values' do
+    Dir.mktmpdir do |root|
+      output = File.join(root, 'runtime')
+      Dir.mkdir(output)
+      scenario = File.join(root, 'scenario.rb')
+      secret = 'stage5-boot-command-secret'
+      File.write(
+        scenario,
+        <<~RUBY
+          require 'rbconfig'
+          Thread.current[:stage5_secret_key] = '#{secret}'
+          Mutex.new.synchronize { :ok }
+          IO.select(nil, nil, nil, 0.001)
+          system(RbConfig.ruby, '-e', 'exit 0', '#{secret}')
+          require 'open3'
+          Open3.capture2(RbConfig.ruby, '-e', 'puts :ok', '#{secret}')
+          require 'monitor'
+          Monitor.new.synchronize { :ok }
+          require 'socket'
+          Socket.new(Socket::AF_INET, Socket::SOCK_STREAM, 0).close
+          require 'net/http'
+          require 'open-uri'
+          raise 'late HTTP hooks missing' unless
+            Net::HTTP.ancestors.include?(FiberAudit::Runtime::Probes::HTTP::NetHTTPInstanceHook) &&
+            URI.singleton_class.ancestors.include?(FiberAudit::Runtime::Probes::HTTP::URIHook)
+        RUBY
+      )
+      environment = activation_environment(
+        root,
+        output,
+        watchdog: FiberAudit::Runtime::WatchdogPolicy.new(enabled: false),
+        probes: true
+      )
+
+      _stdout, stderr, status = run_file_child(environment, scenario)
+      files, sessions = session_records(output)
+      project_session = sessions.find do |records|
+        records.any? { |record| record.dig('payload', 'location', 'path') == 'scenario.rb' }
+      end
+      operations = project_session.filter_map { |record| record.dig('payload', 'operation') }
+
+      expect(status).to be_success, stderr
+      expect(operations).to include(
+        'Thread.current.[]=', 'Mutex#synchronize', 'IO.select',
+        'Kernel.system', 'Open3.capture2', 'Monitor#synchronize', 'Socket.new'
+      )
+      expect(files.map { |path| File.binread(path) }.join).not_to include(secret, 'stage5_secret_key')
+      expect(project_session.filter_map { |record| record.dig('payload', 'location', 'path') }.uniq)
+        .to eq(['scenario.rb'])
     end
   end
 

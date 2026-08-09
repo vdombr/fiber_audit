@@ -4,6 +4,7 @@ require_relative 'base'
 require_relative '../../findings/evidence'
 require_relative '../../correlation/fingerprint'
 require_relative '../../findings/finding'
+require_relative '../../operation_vocabulary'
 
 module FiberAudit
   module Static
@@ -22,11 +23,8 @@ module FiberAudit
         MESSAGE = 'Synchronous HTTP activity in a request-like context may block the thread running the fiber scheduler.'
         REMEDIATION = 'Use a scheduler-aware HTTP client, or move outbound HTTP work outside the request path.'
 
-        NET_HTTP_METHODS = %i[get get_response start request].freeze
-        URI_METHODS = {
-          'URI' => :open,
-          'OpenURI' => :open_uri
-        }.freeze
+        NET_HTTP_METHODS = OperationVocabulary::FA1007_NET_HTTP_METHODS
+        URI_METHODS = OperationVocabulary::FA1007_URI_METHODS
         EMIT_CONTEXTS = %i[request middleware websocket callback].freeze
 
         def analyze(call_sites:)

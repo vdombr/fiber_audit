@@ -4,6 +4,7 @@ require_relative 'base'
 require_relative '../../findings/evidence'
 require_relative '../../correlation/fingerprint'
 require_relative '../../findings/finding'
+require_relative '../../operation_vocabulary'
 
 module FiberAudit
   module Static
@@ -16,12 +17,7 @@ module FiberAudit
 
         RULE_TITLE = 'Thread synchronization'
         RULE_CATEGORY = :synchronization
-        TARGETS = {
-          'Mutex' => %i[lock synchronize try_lock],
-          'ConditionVariable' => %i[wait],
-          'Monitor' => %i[synchronize],
-          'MonitorMixin' => %i[synchronize]
-        }.freeze
+        TARGETS = OperationVocabulary::FA1003_TARGETS
         TRY_LOCK_MSG = 'Mutex.try_lock is non-blocking but may indicate ' \
                        'thread-oriented synchronization in fiber-scheduled code.'
         NORMAL_MSG = 'Synchronization operation may block the thread running the fiber scheduler.'

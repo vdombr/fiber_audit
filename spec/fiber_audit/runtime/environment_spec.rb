@@ -129,6 +129,7 @@ RSpec.describe FiberAudit::Runtime::Environment do
       child = described_class.child_environment(
         settings: settings,
         watchdog_policy: watchdog_policy,
+        probes_enabled: true,
         base_environment: base,
         library_path: library
       )
@@ -136,9 +137,31 @@ RSpec.describe FiberAudit::Runtime::Environment do
       expect(child.fetch('RUBYOPT')).to eq("#{described_class::BOOT_REQUIRE} -w")
       expect(child.fetch('RUBYLIB')).to eq("#{library}#{File::PATH_SEPARATOR}/existing/lib")
       expect(described_class.load_watchdog_policy(child)).to eq(watchdog_policy)
+      expect(described_class.probes_enabled?(child)).to be(true)
+      expect(child.fetch(described_class::PROBES_KEY)).to eq('1')
       expect(child).not_to have_key('SECRET')
       expect(child).to be_frozen
       expect(base).to eq(original)
+    end
+  end
+
+  it 'strictly validates explicit probe activation' do
+    expect(described_class.probes_enabled?({})).to be(false)
+    expect(described_class.probes_enabled?(described_class::PROBES_KEY => '1')).to be(true)
+    expect do
+      described_class.probes_enabled?(described_class::PROBES_KEY => 'yes')
+    end.to raise_error(FiberAudit::RuntimeContractError, /must be 1/)
+
+    with_directories do |root, output|
+      settings = described_class.build(
+        policy: policy,
+        output_directory: output,
+        project_root: root,
+        launch_id: launch_id
+      )
+      expect do
+        described_class.child_environment(settings: settings, probes_enabled: nil)
+      end.to raise_error(FiberAudit::RuntimeContractError, /Boolean/)
     end
   end
 

@@ -4,6 +4,7 @@ require_relative 'base'
 require_relative '../../findings/evidence'
 require_relative '../../correlation/fingerprint'
 require_relative '../../findings/finding'
+require_relative '../../operation_vocabulary'
 
 module FiberAudit
   module Static
@@ -14,14 +15,8 @@ module FiberAudit
         default_confidence :high
         description 'Blocking subprocess call in the fiber scheduler path'
 
-        TARGETS = {
-          'Kernel' => %i[system exec spawn].freeze,
-          'Open3' => %i[capture2 capture2e capture3 pipeline].freeze,
-          'IO' => %i[popen].freeze,
-          'Process' => %i[waitall detach].freeze
-        }.freeze
-
-        BARE_KERNEL_METHODS = %i[system exec spawn].freeze
+        TARGETS = OperationVocabulary::FA1001_TARGETS
+        BARE_KERNEL_METHODS = OperationVocabulary::FA1001_KERNEL_METHODS
 
         MESSAGE = 'Subprocess operation may block the thread running the fiber scheduler.'
         REMEDIATION = 'Move long-running subprocess work outside the request path, or verify scheduler behaviour under load.'

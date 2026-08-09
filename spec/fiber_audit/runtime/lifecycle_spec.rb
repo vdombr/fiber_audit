@@ -74,6 +74,28 @@ RSpec.describe FiberAudit::Runtime::Lifecycle do
     end
   end
 
+  it 'activates probes explicitly and deactivates them before recorder shutdown' do
+    with_runtime do |root, output|
+      streams = {}
+      lifecycle = described_class.start(
+        settings: build_settings(root: root, output: output),
+        probes_enabled: true,
+        clock: build_clock,
+        session_id_source: -> { session_ids.first },
+        pid_source: -> { 4400 },
+        writer_factory: memory_writer_factory(streams)
+      )
+
+      expect(lifecycle.probe_registry).to be_a(FiberAudit::Runtime::Probes::Registry)
+      expect(FiberAudit::Runtime::Probes::Registry.current).to equal(lifecycle.probe_registry)
+      lifecycle.shutdown
+
+      expect(FiberAudit::Runtime::Probes::Registry.current).to be_nil
+      records = streams.fetch(lifecycle.output_path).string.lines.map { |line| JSON.parse(line) }
+      expect(records.map { |record| record['record_type'] }).to eq(%w[session_start session_end])
+    end
+  end
+
   it 'owns explicit watchdog state and a process-local active-operation registry' do
     with_runtime do |root, output|
       streams = {}

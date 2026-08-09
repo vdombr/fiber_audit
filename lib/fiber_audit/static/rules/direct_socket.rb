@@ -4,6 +4,7 @@ require_relative 'base'
 require_relative '../../findings/evidence'
 require_relative '../../correlation/fingerprint'
 require_relative '../../findings/finding'
+require_relative '../../operation_vocabulary'
 
 module FiberAudit
   module Static
@@ -19,9 +20,7 @@ module FiberAudit
         TITLE    = 'Direct socket creation'
         CATEGORY = :network
 
-        EXACT = %w[
-          TCPSocket TCPServer UDPSocket UNIXSocket UNIXServer Socket IPSocket
-        ].freeze
+        EXACT = OperationVocabulary::FA1006_EXACT
 
         MESSAGE = 'Direct socket use may bypass scheduler-aware networking ' \
                   'and block the scheduler thread.'

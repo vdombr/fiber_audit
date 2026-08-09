@@ -68,6 +68,27 @@ RSpec.describe FiberAudit::Runtime::JSONL::Schema do
     expect(record['payload']['measurements']).to eq('threshold_ns' => 25)
   end
 
+  it 'accepts additive targeted-probe kinds without changing schema 1.0' do
+    %i[operation_started operation_completed operation_aborted].each_with_index do |kind, index|
+      probe_event = FiberAudit::Runtime::Event.new(
+        kind: kind,
+        source: :targeted_probe,
+        occurred_at: Time.utc(2026, 8, 2, 12, 0, 1),
+        monotonic_ns: 200 + index,
+        duration_ns: kind == :operation_started ? nil : 50,
+        operation: 'Thread.current.[]',
+        location: FiberAudit::Runtime::Location.new(path: 'app/jobs/task.rb', line: 8),
+        measurements: { operation_sequence: 1 }
+      )
+      record = described_class.event_record(session_id: session_id, sequence: index + 1, event: probe_event)
+
+      expect(described_class.validate!(record)).to equal(record)
+      expect(record['schema_version']).to eq('1.0')
+      expect(record.dig('payload', 'source')).to eq('targeted_probe')
+      expect(record.dig('payload', 'kind')).to eq(kind.to_s)
+    end
+  end
+
   it 'builds session-end records with explicit drop accounting' do
     record = described_class.end_record(session_id: session_id, sequence: 2, summary: summary)
     expect(record['payload']['dropped']).to eq(

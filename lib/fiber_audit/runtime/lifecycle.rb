@@ -7,6 +7,7 @@ require_relative 'environment'
 require_relative 'jsonl/writer'
 require_relative 'recorder'
 require_relative 'redactor'
+require_relative 'probes/registry'
 require_relative 'scheduler_observer'
 require_relative 'session'
 require_relative 'watchdog'
@@ -16,7 +17,8 @@ module FiberAudit
   module Runtime
     class Lifecycle
       attr_reader :settings, :owner_pid, :output_path, :recorder,
-                  :watchdog, :active_operations, :watchdog_policy
+                  :watchdog, :active_operations, :watchdog_policy,
+                  :redactor, :probe_registry
 
       def self.start(...)
         new(...)
@@ -25,15 +27,20 @@ module FiberAudit
       def initialize(
         settings:,
         watchdog_policy: nil,
+        probes_enabled: false,
         clock: Clock.new,
         session_id_source: SecureRandom.method(:uuid),
         pid_source: Process.method(:pid),
         writer_factory: JSONL::Writer.method(:open),
         random: Sampler::RANDOM_SOURCE
       )
-        validate_dependencies!(settings, watchdog_policy, clock, session_id_source, pid_source, writer_factory, random)
+        validate_dependencies!(
+          settings, watchdog_policy, probes_enabled, clock,
+          session_id_source, pid_source, writer_factory, random
+        )
         @settings = settings
         @watchdog_policy = watchdog_policy
+        @probes_enabled = probes_enabled
         @clock = clock
         @session_id_source = session_id_source
         @pid_source = pid_source
@@ -46,6 +53,8 @@ module FiberAudit
         @watchdog = nil
         @scheduler_observer = nil
         @active_operations = nil
+        @redactor = nil
+        @probe_registry = nil
         start_process_session!
       rescue StandardError => e
         startup_failure!(e)
@@ -74,6 +83,8 @@ module FiberAudit
         @watchdog = nil
         @scheduler_observer = nil
         @active_operations = nil
+        @redactor = nil
+        @probe_registry = nil
         @state = :starting
         start_process_session!
         self
@@ -85,11 +96,11 @@ module FiberAudit
         ensure_current_process!
         return @summary if closed?
 
-        watchdog_error = stop_watchdog
-        status = watchdog_error && exception.nil? ? :degraded : shutdown_status(exception)
+        runtime_error = stop_runtime_observers
+        status = runtime_error && exception.nil? ? :degraded : shutdown_status(exception)
         @summary = recorder&.close(status: status)
         @state = :closed
-        raise watchdog_error if watchdog_error && !settings.policy.fail_open?
+        raise runtime_error if runtime_error && !settings.policy.fail_open?
 
         @summary
       rescue StandardError => e
@@ -101,13 +112,14 @@ module FiberAudit
 
       private
 
-      def validate_dependencies!(candidate_settings, watchdog, candidate_clock, session_ids, pids, writers, random)
+      def validate_dependencies!(candidate_settings, watchdog, probes, candidate_clock, session_ids, pids, writers, random)
         unless candidate_settings.is_a?(Environment::Settings)
           raise RuntimeContractError, 'settings must be FiberAudit::Runtime::Environment::Settings'
         end
         unless watchdog.nil? || watchdog.is_a?(WatchdogPolicy)
           raise RuntimeContractError, 'watchdog_policy must be a FiberAudit::Runtime::WatchdogPolicy or nil'
         end
+        raise RuntimeContractError, 'probes_enabled must be a Boolean' unless [true, false].include?(probes)
         raise RuntimeContractError, 'clock must be a FiberAudit::Runtime::Clock' unless candidate_clock.is_a?(Clock)
 
         {
@@ -150,28 +162,46 @@ module FiberAudit
 
       def setup_runtime_observers!
         @active_operations = ActiveOperations.new(pid_source: @pid_source)
-        return unless watchdog_policy
+        @redactor = Redactor.new(root: settings.project_root, policy: settings.policy)
+        setup_watchdog! if watchdog_policy
+        setup_probes! if @probes_enabled
+      rescue StandardError => e
+        recorder.internal_error!
+        close_failed_startup!(e)
+      end
 
+      def setup_watchdog!
         @watchdog = Watchdog.new(
           policy: watchdog_policy,
           recorder: recorder,
-          redactor: Redactor.new(root: settings.project_root, policy: settings.policy),
+          redactor: redactor,
           active_operations: active_operations,
           clock: @clock
         )
         @scheduler_observer = SchedulerObserver.activate(watchdog: watchdog) if watchdog.enabled?
-      rescue StandardError => e
-        recorder.internal_error!
-        @watchdog = nil
-        @scheduler_observer = nil
-        unless settings.policy.fail_open?
-          begin
-            recorder.close(status: :degraded)
-          rescue StandardError
-            nil
-          end
-          raise e
+      end
+
+      def setup_probes!
+        base = Probes::Base.new(
+          recorder: recorder,
+          clock: @clock,
+          redactor: redactor,
+          active_operations: active_operations,
+          pid_source: @pid_source
+        )
+        @probe_registry = Probes::Registry.activate(base: base)
+      end
+
+      def close_failed_startup!(error)
+        @probe_registry = nil
+        return if settings.policy.fail_open?
+
+        begin
+          recorder.close(status: :degraded)
+        rescue StandardError
+          nil
         end
+        raise error
       end
 
       def build_output_path(session_id)
@@ -190,19 +220,28 @@ module FiberAudit
         @watchdog = nil
         @scheduler_observer = nil
         @active_operations = nil
+        @redactor = nil
+        @probe_registry = nil
       end
 
-      def stop_watchdog
+      def stop_runtime_observers
         error = nil
+        begin
+          Probes::Registry.deactivate(probe_registry) if probe_registry
+        rescue StandardError => e
+          error ||= e
+        ensure
+          @probe_registry = nil
+        end
         begin
           SchedulerObserver.deactivate(@scheduler_observer) if @scheduler_observer
           watchdog&.stop
         rescue StandardError => e
-          recorder&.internal_error!
-          error = e
+          error ||= e
         ensure
           @scheduler_observer = nil
         end
+        recorder&.internal_error! if error
         error
       end
 

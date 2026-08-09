@@ -15,7 +15,11 @@
 - An opt-in scheduler watchdog with explicit disabled/absent/active/unsupported
   states, scheduler-owned monotonic heartbeats, one bounded start/completion pair
   per stall, privacy-safe project frame evidence, and a process-local active
-  operation registry. Operation-specific probes are not implemented yet.
+  operation registry.
+- Targeted FA1001–FA1007 runtime probes with monotonic timing, conservative
+  project callsites, active-operation overlap, strict recursion protection, late
+  standard-library installation, and no captured commands, URLs, addresses,
+  payloads, exception data, or thread-local values.
 
 ## 0.1.0 (2026-08-02)
 

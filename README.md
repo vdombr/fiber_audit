@@ -60,7 +60,7 @@ Explicit `--format` always wins.
 
 Use `fiber-audit explain <RULE_ID>` for exact targets and remediation.
 
-## Runtime watchdog (unreleased v0.2 work)
+## Runtime audit (unreleased v0.2 work)
 
 The explicit runtime command observes only a command supplied after `--`; it
 never executes source fragments discovered by static analysis:
@@ -70,10 +70,21 @@ fiber-audit runtime -- bundle exec rspec
 ```
 
 Each observed Ruby process writes a separate owner-only JSONL session under
-`tmp/fiber-audit-runtime` by default. The scheduler watchdog records one bounded
-start/completion pair when its scheduler-owned heartbeat stops progressing past
-the configured threshold. Scheduler-friendly waits should continue heartbeats.
-A session also records an explicit watchdog state:
+`tmp/fiber-audit-runtime` by default. Targeted probes observe the operations
+represented by FA1001–FA1007: subprocess calls, thread waits, synchronization,
+thread-local access, explicit select, direct sockets, and synchronous HTTP.
+Events contain canonical operation names, monotonic duration, and a conservative
+project-relative callsite. They never contain commands, URLs, addresses, ports,
+headers, payloads, responses, exception data, or thread-local keys and values.
+Libraries such as Open3, Monitor, Socket, Net::HTTP, and OpenURI may be loaded
+after runtime boot; FiberAudit rescans only these known targets after `require`.
+Runtime execution context remains `unknown` until the optional Rails integration
+is implemented in the next stage.
+
+The scheduler watchdog records one bounded start/completion pair when its
+scheduler-owned heartbeat stops progressing past the configured threshold.
+Scheduler-friendly waits should continue heartbeats. A session also records an
+explicit watchdog state:
 
 - `watchdog_active` — a heartbeat ran under an installed scheduler;
 - `watchdog_absent` — no scheduler was observed;

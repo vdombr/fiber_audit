@@ -28,6 +28,7 @@ module FiberAudit
           @lifecycle = Lifecycle.start(
             settings: settings,
             watchdog_policy: watchdog_policy,
+            probes_enabled: Environment.probes_enabled?(environment),
             clock: clock,
             session_id_source: session_id_source,
             pid_source: pid_source,

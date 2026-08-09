@@ -4,6 +4,7 @@ require_relative 'base'
 require_relative '../../findings/evidence'
 require_relative '../../correlation/fingerprint'
 require_relative '../../findings/finding'
+require_relative '../../operation_vocabulary'
 
 module FiberAudit
   module Static
@@ -22,10 +23,7 @@ module FiberAudit
         MESSAGE = 'IO.select may bypass scheduler-aware I/O and block the thread running the fiber scheduler.'
         REMEDIATION = 'Use scheduler-aware I/O APIs or allow the active Fiber scheduler to manage readiness.'
 
-        TARGETS = {
-          'IO' => :select,
-          'Kernel' => :select
-        }.freeze
+        TARGETS = OperationVocabulary::FA1005_TARGETS
 
         class << self
           def title = TITLE

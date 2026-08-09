@@ -17,6 +17,7 @@ module FiberAudit
       SETTINGS_KEY = 'FIBER_AUDIT_RUNTIME_SETTINGS'
       FAILURE_MODE_KEY = 'FIBER_AUDIT_RUNTIME_FAILURE_MODE'
       WATCHDOG_SETTINGS_KEY = 'FIBER_AUDIT_RUNTIME_WATCHDOG_SETTINGS'
+      PROBES_KEY = 'FIBER_AUDIT_RUNTIME_PROBES'
       BOOT_REQUIRE = '-rfiber_audit/runtime/boot'
       MAX_SETTINGS_BYTES = 16_384
       MAX_WATCHDOG_SETTINGS_BYTES = 1_024
@@ -161,14 +162,24 @@ module FiberAudit
         raise RuntimeContractError, "#{FAILURE_MODE_KEY} must be open or closed"
       end
 
+      def probes_enabled?(environment = ENV)
+        value = environment[PROBES_KEY]
+        return false if value.nil?
+        return true if value == '1'
+
+        raise RuntimeContractError, "#{PROBES_KEY} must be 1 when present"
+      end
+
       def child_environment(
         settings:,
         watchdog_policy: nil,
+        probes_enabled: false,
         base_environment: ENV,
         library_path: default_library_path
       )
         require_settings!(settings)
         require_watchdog_policy!(watchdog_policy) if watchdog_policy
+        raise RuntimeContractError, 'probes_enabled must be a Boolean' unless [true, false].include?(probes_enabled)
         raise RuntimeContractError, 'base_environment must be a Hash-like object' unless base_environment.respond_to?(:[])
 
         environment = {
@@ -179,6 +190,7 @@ module FiberAudit
           'RUBYLIB' => prepend_token(base_environment['RUBYLIB'], library_path, separator: File::PATH_SEPARATOR)
         }
         environment[WATCHDOG_SETTINGS_KEY] = dump_watchdog_policy(watchdog_policy) if watchdog_policy
+        environment[PROBES_KEY] = '1' if probes_enabled
         environment.transform_values(&:freeze).freeze
       end
 

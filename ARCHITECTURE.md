@@ -23,8 +23,9 @@ A static-only result must never claim an unconditional `PASS`.
 > project discovery, configuration, semantic and syntax analysis, execution
 > contexts, FA1001–FA1007, suppressions, status derivation, text/JSON reports,
 > and the CLI. The v0.2 runtime contracts, bounded JSONL recorder, explicit
-> child-process boot, lifecycle, supervising command, and bounded scheduler
-> watchdog are implemented; targeted operation probes remain future work.
+> child-process boot, lifecycle, supervising command, bounded scheduler
+> watchdog, and targeted FA1001–FA1007 operation probes are implemented;
+> Rails runtime context and static/runtime correlation remain future work.
 
 ## 2. Scope
 
@@ -158,7 +159,7 @@ fiber-audit static
 | Rule system | Registry and FA1001–FA1007 | Implemented |
 | Audit coordinator | End-to-end orchestration and status | Implemented |
 | Reporters | Text and JSON schema 1.0 | Implemented |
-| Runtime engine | Runtime observation and confirmation | Future |
+| Runtime engine | Bounded sessions, watchdog, targeted operations | Implemented through Stage 5 |
 
 The public loader is `lib/fiber_audit.rb`.
 
@@ -629,18 +630,40 @@ through `Fiber.set_scheduler`. A scheduler-owned heartbeat fiber updates
 monotonic progress; one process-local watchdog thread detects threshold crossings.
 Each stall emits at most one start and one completion event plus a configured,
 bounded set of project-relative frame events. An active-operation registry uses
-only ephemeral thread/fiber identities and process-local sequences, ready for
-targeted probes without retaining arguments or request identifiers.
+only ephemeral thread/fiber identities and process-local sequences so targeted
+operations can overlap scheduler stalls without retaining arguments or request
+identifiers.
 
 Watchdog state is explicit: disabled, absent, active, or unsupported. State and
 stall events bypass random sampling but still consume all recorder rate, event,
 record, and session limits. Runtime JSONL schema `1.0` and its `session_start`
 contract remain unchanged; watchdog policy travels only in strict activation
 settings, while state and policy measurements are ordinary bounded events.
-Shutdown first makes scheduler callbacks inert, requests heartbeat/watchdog stop,
-bounds and joins the watchdog thread, completes any open stall, and only then
-closes the recorder. Fork rebinding discards inherited watchdog references before
-touching their locks and creates process-local replacements.
+Explicit boot installs narrow, idempotent `Module#prepend` wrappers for the
+operations represented by FA1001–FA1007. One shared probe base owns monotonic
+timing, sampled completion/abortion events, conservative direct project
+callsites, recursion protection, and active-operation registration. Probe events
+retain only canonical operations, duration, project-relative location,
+ephemeral identities, operation sequence, and a small fixed set of Booleans.
+Commands, URLs, addresses, ports, headers, payloads, return data, exception data,
+and thread-local keys or values are never retained.
+
+A process-local registry deactivates wrappers without attempting to remove Ruby
+prepends. A narrow `Kernel#require` wrapper rescans only known standard-library
+targets after successful loads; no unrestricted tracing, `load`, `const_missing`,
+or autoload observation is used. Unknown ownership is skipped rather than mapped
+to a project callsite.
+
+Stage 5 adds `source: targeted_probe` and the event kinds `operation_started`,
+`operation_completed`, and `operation_aborted`. These values use existing bounded
+identifier fields and are backward-compatible additions to runtime JSONL schema
+`1.0`; the envelope, payload keys, and original golden fixture remain unchanged.
+
+Shutdown first deactivates probes, then makes scheduler callbacks inert, requests
+heartbeat/watchdog stop, bounds and joins the watchdog thread, completes any open
+stall, and only then closes the recorder. Fork rebinding discards inherited probe
+and watchdog references before touching their locks and creates process-local
+replacements.
 
 Loading the gem normally performs no instrumentation, fibers, threads, or file
 I/O. The observer is activated only by explicit runtime boot. A native operation
@@ -650,8 +673,6 @@ never clean certification.
 
 Remaining runtime concepts include:
 
-- targeted `Module#prepend` instrumentation;
-- limited `TracePoint` use;
 - Rails request and callback correlation;
 - static/runtime evidence merging;
 - runtime coverage sufficient to support future `PASS` semantics.
@@ -672,7 +693,7 @@ lib/fiber_audit/correlation/fingerprint.rb stable identity
 lib/fiber_audit/suppressions/              suppression parsing and filtering
 lib/fiber_audit/static/                    semantic, call-site, context, rules
 lib/fiber_audit/reporters/                 text and JSON schema 1.0
-lib/fiber_audit/runtime/                    values, recorder, lifecycle, watchdog
+lib/fiber_audit/runtime/                    values, lifecycle, watchdog, probes
 ARCHITECTURE.md                             supported architecture and boundaries
 ```
 

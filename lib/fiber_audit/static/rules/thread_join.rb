@@ -4,6 +4,7 @@ require_relative 'base'
 require_relative '../../findings/evidence'
 require_relative '../../correlation/fingerprint'
 require_relative '../../findings/finding'
+require_relative '../../operation_vocabulary'
 
 module FiberAudit
   module Static
@@ -30,8 +31,8 @@ module FiberAudit
         MESSAGE  = 'Waiting for a thread may block the thread running the fiber scheduler.'
         REMEDIATION = 'Replace thread waits with scheduler-aware coordination, ' \
                       'or move the work outside the fiber-scheduled path.'
-        TARGET_METHODS  = %i[join value].freeze
-        CANONICAL_OPS   = %w[Thread.join Thread.value].freeze
+        TARGET_METHODS  = OperationVocabulary::FA1002_METHODS
+        CANONICAL_OPS   = OperationVocabulary::FA1002_OPERATIONS
         DIRECT_CLASS_SOURCE = 'Thread'
 
         def analyze(call_sites:)
