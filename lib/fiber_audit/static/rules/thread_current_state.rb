@@ -9,27 +9,32 @@ require_relative '../../operation_vocabulary'
 module FiberAudit
   module Static
     module Rules
-      # Detect thread-variable and Thread.current index state.
+      # FA1004: Detect thread-variable state access.
+      #
+      # Detects only thread_variable_get/set operations, not Thread.current[]
+      # index operations. Thread variables are shared across all fibers on the
+      # same thread and may leak request-local data.
       class ThreadCurrentState < Base
         id 'FA1004'
         severity :high
         confidence :high
-        description 'Thread-local state in fiber code may be shared across fibers and leak request-local data'
+        description 'Thread thread variables in fiber code may be shared across fibers and leak request-local data'
 
-        TITLE = 'Thread-local state in fiber code'
+        TITLE = 'Thread thread variables in fiber code'
         CATEGORY = :thread_local
-        MESSAGE = 'Thread-local state may be shared across fibers and leak request-local data.'
-        REMEDIATION = 'Use fiber-local or framework-provided request-local state instead of Thread thread variables.'
+        MESSAGE = 'Thread thread variables are shared across all fibers on the same thread ' \
+                  'and may leak request-local data between concurrent requests.'
+        REMEDIATION = 'Prefer fiber-local storage (Fiber.current[:key]) or framework-provided ' \
+                      'request-local state over thread_variable_get/set.'
 
         THREAD_VARIABLE_METHODS = OperationVocabulary::FA1004_THREAD_VARIABLE_METHODS
-        INDEX_METHODS = OperationVocabulary::FA1004_INDEX_METHODS
 
         def analyze(call_sites:)
           findings = []
           call_sites.each do |site|
             next if skip?(site)
 
-            finding = match_thread_variable(site) || match_index_op(site)
+            finding = match_thread_variable(site)
             findings << finding if finding
           end
           findings
@@ -74,19 +79,8 @@ module FiberAudit
           build_finding(site, :high, :high, operation(site))
         end
 
-        def match_index_op(site)
-          return unless INDEX_METHODS.include?(site.method_name)
-          return unless site.receiver_source == 'Thread.current'
-
-          build_finding(site, :medium, :high, operation(site))
-        end
-
         def operation(site)
-          if INDEX_METHODS.include?(site.method_name)
-            "Thread.current.#{site.method_name}"
-          else
-            "Thread.#{site.method_name}"
-          end
+          "Thread.#{site.method_name}"
         end
 
         def build_finding(site, default_sev, conf, operation)
@@ -104,7 +98,11 @@ module FiberAudit
             operation: operation,
             execution_context: context,
             message: MESSAGE,
-            evidence: [Evidence.new(source: site.receiver_source, message: "Thread-local access via #{site.method_name}")],
+            evidence: [Evidence.new(
+              source: site.receiver_source,
+              message: "Thread thread variable access via #{site.method_name}",
+              details: { operation: operation, receiver: site.receiver_source }
+            )],
             remediation: REMEDIATION
           )
         end

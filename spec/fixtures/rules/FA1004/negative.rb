@@ -1,14 +1,24 @@
 # frozen_string_literal: true
 
-# Negative fixtures for FA1004 - Thread-local state detection
+# Negative fixtures for FA1004 - Thread thread variable detection
 # These patterns should NOT trigger findings
+
+# Thread.current[] (index read) - no longer detected
+def read_index
+  Thread.current[:request_id]
+end
+
+# Thread.current[]= (index write) - no longer detected
+def write_index(value)
+  Thread.current[:request_id] = value
+end
 
 # ActiveSupport::CurrentAttributes (deferred)
 def use_current_attributes
   ActiveSupport::CurrentAttributes[:current_user]
 end
 
-# Arbitrary methods on Thread.current (not thread_variable_* or []/[]=)
+# Arbitrary methods on Thread.current (not thread_variable_*)
 def arbitrary_method
   Thread.current.object_id
 end

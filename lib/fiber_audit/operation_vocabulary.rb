@@ -7,7 +7,8 @@ module FiberAudit
       'Kernel' => %i[system exec spawn].freeze,
       'Open3' => %i[capture2 capture2e capture3 pipeline].freeze,
       'IO' => %i[popen].freeze,
-      'Process' => %i[waitall detach].freeze
+      'Process' => %i[spawn exec wait wait2 waitpid waitpid2 waitall detach].freeze,
+      'Process::Status' => %i[wait].freeze
     }.freeze
     FA1001_KERNEL_METHODS = %i[system exec spawn].freeze
 

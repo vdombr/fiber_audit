@@ -4,10 +4,10 @@
   "status": "FAIL",
   "disclaimer": "This is a static-only audit. PASS cannot be granted without runtime coverage.",
   "summary": {
-    "critical": 7,
+    "critical": 2,
     "high": 0,
-    "medium": 0,
-    "low": 0,
+    "medium": 2,
+    "low": 3,
     "info": 0,
     "suppressed": 0,
     "total": 7
@@ -20,47 +20,48 @@
   "findings": [
     {
       "rule_id": "FA1001",
-      "title": "Blocking subprocess call",
+      "title": "Subprocess wait",
       "category": "subprocess",
       "severity": "critical",
       "confidence": "unknown",
       "location": {
         "path": "app/controllers/fiber_blockers_controller.rb",
-        "line": 5,
+        "line": 4,
         "column": 4
       },
       "symbol": "FiberBlockersController#index",
       "operation": "Kernel.system",
       "execution_context": "request",
-      "message": "Subprocess operation may block the thread running the fiber scheduler.",
+      "message": "Waiting for a subprocess may block the thread running the fiber scheduler.",
       "evidence": [
         {
           "source": "static",
-          "message": "Matched Kernel.system",
+          "message": "Matched Kernel.system (waiting)",
           "details": {
             "receiver": "Kernel",
-            "method": "system"
+            "method": "system",
+            "semantic": "waiting"
           }
         }
       ],
-      "remediation": "Move long-running subprocess work outside the request path, or verify scheduler behaviour under load.",
+      "remediation": "Use scheduler-aware subprocess APIs or move waits outside the fiber-scheduled path.",
       "fingerprint": "8ba0b7c42c83edd347a9dcb7dbc76272f0c6cacb82c2957f82d319a5fc3ae431"
     },
     {
       "rule_id": "FA1002",
       "title": "Thread wait",
       "category": "synchronization",
-      "severity": "critical",
+      "severity": "low",
       "confidence": "high",
       "location": {
         "path": "app/controllers/fiber_blockers_controller.rb",
-        "line": 6,
+        "line": 5,
         "column": 4
       },
       "symbol": "FiberBlockersController#index",
       "operation": "Thread.join",
       "execution_context": "request",
-      "message": "Waiting for a thread may block the thread running the fiber scheduler.",
+      "message": "Thread#join/value bypasses fiber scheduler cooperation and may stall the scheduler thread.",
       "evidence": [
         {
           "source": "static_analysis",
@@ -82,6 +83,35 @@
       "rule_id": "FA1003",
       "title": "Thread synchronization",
       "category": "synchronization",
+      "severity": "low",
+      "confidence": "high",
+      "location": {
+        "path": "app/controllers/fiber_blockers_controller.rb",
+        "line": 6,
+        "column": 4
+      },
+      "symbol": "FiberBlockersController#index",
+      "operation": "Mutex#lock",
+      "execution_context": "request",
+      "message": "Blocking synchronization may stall the fiber scheduler thread; prefer scheduler-aware primitives.",
+      "evidence": [
+        {
+          "source": "Mutex#lock",
+          "message": "Blocking synchronization may stall the fiber scheduler thread; prefer scheduler-aware primitives.",
+          "details": {
+            "receiver": "Mutex.new",
+            "method": "lock",
+            "constant": "Mutex"
+          }
+        }
+      ],
+      "remediation": "Use scheduler-aware synchronization primitives, or verify contention behaviour under the active fiber scheduler.",
+      "fingerprint": "b6f590cc8e16885640555bc8bca17fc88bd1118e4dd33bef84d2289b22576a3e"
+    },
+    {
+      "rule_id": "FA1004",
+      "title": "Thread thread variables in fiber code",
+      "category": "thread_local",
       "severity": "critical",
       "confidence": "high",
       "location": {
@@ -90,28 +120,27 @@
         "column": 4
       },
       "symbol": "FiberBlockersController#index",
-      "operation": "Mutex#lock",
+      "operation": "Thread.thread_variable_get",
       "execution_context": "request",
-      "message": "Synchronization operation may block the thread running the fiber scheduler.",
+      "message": "Thread thread variables are shared across all fibers on the same thread and may leak request-local data between concurrent requests.",
       "evidence": [
         {
-          "source": "Mutex#lock",
-          "message": "Synchronization operation may block the thread running the fiber scheduler.",
+          "source": "Thread.current",
+          "message": "Thread thread variable access via thread_variable_get",
           "details": {
-            "receiver": "Mutex.new",
-            "method": "lock",
-            "constant": "Mutex"
+            "operation": "Thread.thread_variable_get",
+            "receiver": "Thread.current"
           }
         }
       ],
-      "remediation": "Use scheduler-aware synchronization primitives, or verify contention and scheduler behaviour under load.",
-      "fingerprint": "b6f590cc8e16885640555bc8bca17fc88bd1118e4dd33bef84d2289b22576a3e"
+      "remediation": "Prefer fiber-local storage (Fiber.current[:key]) or framework-provided request-local state over thread_variable_get/set.",
+      "fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
-      "rule_id": "FA1004",
-      "title": "Thread-local state in fiber code",
-      "category": "thread_local",
-      "severity": "critical",
+      "rule_id": "FA1005",
+      "title": "Explicit IO.select call",
+      "category": "blocking_io",
+      "severity": "medium",
       "confidence": "high",
       "location": {
         "path": "app/controllers/fiber_blockers_controller.rb",
@@ -119,34 +148,9 @@
         "column": 4
       },
       "symbol": "FiberBlockersController#index",
-      "operation": "Thread.current.[]",
-      "execution_context": "request",
-      "message": "Thread-local state may be shared across fibers and leak request-local data.",
-      "evidence": [
-        {
-          "source": "Thread.current",
-          "message": "Thread-local access via []",
-          "details": {}
-        }
-      ],
-      "remediation": "Use fiber-local or framework-provided request-local state instead of Thread thread variables.",
-      "fingerprint": "12a6e87f35e3be3702bfed55efe285781fc12754c1f848037b70be6be65feea7"
-    },
-    {
-      "rule_id": "FA1005",
-      "title": "Explicit IO.select call",
-      "category": "blocking_io",
-      "severity": "critical",
-      "confidence": "high",
-      "location": {
-        "path": "app/controllers/fiber_blockers_controller.rb",
-        "line": 9,
-        "column": 4
-      },
-      "symbol": "FiberBlockersController#index",
       "operation": "IO.select",
       "execution_context": "request",
-      "message": "IO.select may bypass scheduler-aware I/O and block the thread running the fiber scheduler.",
+      "message": "Explicit IO.select bypasses scheduler-aware I/O cooperation and may stall the scheduler thread.",
       "evidence": [
         {
           "source": "static_analysis",
@@ -164,17 +168,17 @@
       "rule_id": "FA1006",
       "title": "Direct socket creation",
       "category": "network",
-      "severity": "critical",
+      "severity": "low",
       "confidence": "high",
       "location": {
         "path": "app/controllers/fiber_blockers_controller.rb",
-        "line": 10,
+        "line": 9,
         "column": 4
       },
       "symbol": "FiberBlockersController#index",
       "operation": "TCPSocket.new",
       "execution_context": "request",
-      "message": "Direct socket use may bypass scheduler-aware networking and block the scheduler thread.",
+      "message": "Direct socket use may bypass scheduler-aware networking cooperation and stall the scheduler thread.",
       "evidence": [
         {
           "source": "static_analysis",
@@ -192,17 +196,17 @@
       "rule_id": "FA1007",
       "title": "Blocking HTTP call in request path",
       "category": "network",
-      "severity": "critical",
+      "severity": "medium",
       "confidence": "high",
       "location": {
         "path": "app/controllers/fiber_blockers_controller.rb",
-        "line": 11,
+        "line": 10,
         "column": 4
       },
       "symbol": "FiberBlockersController#index",
       "operation": "Net::HTTP.get",
       "execution_context": "request",
-      "message": "Synchronous HTTP activity in a request-like context may block the thread running the fiber scheduler.",
+      "message": "Synchronous HTTP activity may bypass scheduler-aware I/O cooperation in request-like contexts.",
       "evidence": [
         {
           "source": "static_analysis",

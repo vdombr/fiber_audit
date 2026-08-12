@@ -179,6 +179,25 @@ module FiberAudit
         def severity_index(severity)
           Severity.index(severity)
         end
+
+        # Compute the advisory severity for a finding without applying
+        # the context ceiling. Advisory rules (FA1002, FA1003, FA1005,
+        # FA1006, FA1007) use this to respect configuration overrides
+        # but not escalate based on execution context.
+        #
+        # Resolution order:
+        #   1. configuration.severity_override(rule_id) replaces the default
+        #   2. No context ceiling is applied
+        #
+        # @param default_sev [Symbol, String] rule's default severity
+        # @return [Symbol] the resolved severity
+        def advisory_severity(default_sev)
+          # Normalize String to Symbol defensively
+          default_sev = default_sev.to_sym if default_sev.is_a?(String)
+
+          # Configuration override replaces default entirely, no ceiling
+          configuration.severity_override(self.class.id) || default_sev
+        end
       end
     end
   end

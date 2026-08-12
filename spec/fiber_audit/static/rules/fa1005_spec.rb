@@ -211,35 +211,47 @@ RSpec.describe FiberAudit::Static::Rules::IOSelect do
       end
     end
 
-    context 'with severity' do
-      it 'raises to :critical in :request context' do
+    context 'with advisory severity (no context escalation)' do
+      it 'stays :medium in :request context (no escalation)' do
         cs = build_call_site(execution_context: :request)
         findings = rule.analyze(call_sites: [cs])
-        expect(findings.first.severity).to eq(:critical)
+        expect(findings.first.severity).to eq(:medium)
       end
 
-      it 'raises to :critical in :middleware context' do
+      it 'stays :medium in :middleware context (no escalation)' do
         cs = build_call_site(execution_context: :middleware)
         findings = rule.analyze(call_sites: [cs])
-        expect(findings.first.severity).to eq(:critical)
+        expect(findings.first.severity).to eq(:medium)
       end
 
-      it 'raises to :critical in :websocket context' do
+      it 'stays :medium in :websocket context (no escalation)' do
         cs = build_call_site(execution_context: :websocket)
         findings = rule.analyze(call_sites: [cs])
-        expect(findings.first.severity).to eq(:critical)
+        expect(findings.first.severity).to eq(:medium)
       end
 
-      it 'keeps :medium in :rake_task context' do
+      it 'stays :medium in :rake_task context' do
         cs = build_call_site(execution_context: :rake_task)
         findings = rule.analyze(call_sites: [cs])
         expect(findings.first.severity).to eq(:medium)
       end
 
-      it 'raises to :high in :job context' do
+      it 'stays :medium in :job context (no escalation)' do
         cs = build_call_site(execution_context: :job)
         findings = rule.analyze(call_sites: [cs])
-        expect(findings.first.severity).to eq(:high)
+        expect(findings.first.severity).to eq(:medium)
+      end
+    end
+
+    context 'with configuration override' do
+      let(:configuration) do
+        instance_double(FiberAudit::Configuration, severity_override: :low)
+      end
+
+      it 'applies configuration override without context ceiling' do
+        cs = build_call_site(execution_context: :request)
+        findings = rule.analyze(call_sites: [cs])
+        expect(findings.first.severity).to eq(:low)
       end
     end
 
@@ -261,7 +273,7 @@ RSpec.describe FiberAudit::Static::Rules::IOSelect do
         expect(finding.rule_id).to eq('FA1005')
         expect(finding.title).to eq('Explicit IO.select call')
         expect(finding.category).to eq(:blocking_io)
-        expect(finding.severity).to eq(:critical)
+        expect(finding.severity).to eq(:medium)
         expect(finding.confidence).to eq(:high)
         expect(finding.operation).to eq('IO.select')
         expect(finding.execution_context).to eq(:request)
@@ -270,7 +282,7 @@ RSpec.describe FiberAudit::Static::Rules::IOSelect do
         expect(finding.location.line).to eq(42)
         expect(finding.location.column).to eq(6)
         expect(finding.message).to eq(
-          'IO.select may bypass scheduler-aware I/O and block the thread running the fiber scheduler.'
+          'Explicit IO.select bypasses scheduler-aware I/O cooperation and may stall the scheduler thread.'
         )
         expect(finding.remediation).to eq(
           'Use scheduler-aware I/O APIs or allow the active Fiber scheduler to manage readiness.'

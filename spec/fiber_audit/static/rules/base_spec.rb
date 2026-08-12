@@ -561,6 +561,92 @@ RSpec.describe FiberAudit::Static::Rules::Base do
     end
   end
 
+  # ── advisory_severity helper ────────────────────────────────────────
+  describe '#advisory_severity (via analyze helper)' do
+    # Helper to expose the private advisory_severity method
+    let(:rule_with_advisory) do
+      klass = Class.new(described_class) do
+        id 'FA7777'
+        severity :medium
+        confidence :high
+        description 'advisory_severity test rule'
+
+        def analyze(call_sites:)
+          []
+        end
+
+        def call_advisory_severity(default_sev)
+          advisory_severity(default_sev)
+        end
+      end
+
+      klass.new(
+        workspace: workspace,
+        context_resolver: context_resolver,
+        configuration: configuration
+      )
+    end
+
+    context 'with no configuration override' do
+      it 'returns the default severity unchanged' do
+        expect(rule_with_advisory.call_advisory_severity(:low)).to eq(:low)
+      end
+
+      it 'does not apply context ceiling (unlike severity_for)' do
+        # advisory_severity should NOT escalate to :critical in request context
+        # This is the key difference from severity_for
+        %i[critical high medium low info].each do |sev|
+          expect(rule_with_advisory.call_advisory_severity(sev)).to eq(sev)
+        end
+      end
+
+      it 'normalizes String to Symbol' do
+        expect(rule_with_advisory.call_advisory_severity('medium')).to eq(:medium)
+      end
+    end
+
+    context 'with configuration severity override' do
+      let(:override_config) do
+        instance_double(FiberAudit::Configuration,
+                        severity_override: :high,
+                        rule_enabled?: true)
+      end
+
+      let(:rule_with_override) do
+        klass = Class.new(described_class) do
+          id 'FA6666'
+          severity :medium
+          confidence :high
+          description 'advisory override test rule'
+
+          def analyze(call_sites:)
+            []
+          end
+
+          def call_advisory_severity(default_sev)
+            advisory_severity(default_sev)
+          end
+        end
+
+        klass.new(
+          workspace: workspace,
+          context_resolver: context_resolver,
+          configuration: override_config
+        )
+      end
+
+      it 'applies override replacing default' do
+        # Override sets to :high, replaces :medium default
+        expect(rule_with_override.call_advisory_severity(:medium)).to eq(:high)
+      end
+
+      it 'does not apply context ceiling even with override' do
+        # Override sets to :high, but no context ceiling escalation
+        expect(rule_with_override.call_advisory_severity(:low)).to eq(:high)
+      end
+    end
+  end
+
   # ── Exhaustive monotonic table spec ──────────────────────────────────
   describe 'exhaustive monotonic ceiling table' do
     # This spec verifies the full severity × context matrix for one default

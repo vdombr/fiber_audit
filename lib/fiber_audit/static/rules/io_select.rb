@@ -10,17 +10,17 @@ module FiberAudit
   module Static
     module Rules
       # FA1005: Detects explicit IO.select calls that may bypass
-      # scheduler-aware I/O and block the scheduler thread.
+      # scheduler-aware I/O cooperation. Advisory rule with :medium default.
       class IOSelect < Base
         id 'FA1005'
         severity :medium
         default_confidence :high
-        description 'Explicit IO.select call that may bypass scheduler-aware I/O'
+        description 'Explicit IO.select bypasses scheduler-aware I/O cooperation'
 
         TITLE    = 'Explicit IO.select call'
         CATEGORY = :blocking_io
 
-        MESSAGE = 'IO.select may bypass scheduler-aware I/O and block the thread running the fiber scheduler.'
+        MESSAGE = 'Explicit IO.select bypasses scheduler-aware I/O cooperation and may stall the scheduler thread.'
         REMEDIATION = 'Use scheduler-aware I/O APIs or allow the active Fiber scheduler to manage readiness.'
 
         TARGETS = OperationVocabulary::FA1005_TARGETS
@@ -79,7 +79,7 @@ module FiberAudit
             rule_id: self.class.id,
             title: TITLE,
             category: CATEGORY,
-            severity: severity_for(:medium, context),
+            severity: advisory_severity(:medium),
             confidence: confidence,
             location: site.location,
             symbol: site.enclosing_symbol,

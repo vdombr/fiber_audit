@@ -9,20 +9,27 @@ require_relative '../../operation_vocabulary'
 module FiberAudit
   module Static
     module Rules
+      # FA1003: Thread synchronization primitives that may interfere with
+      # fiber scheduler cooperation. Advisory rule with :low default.
+      #
+      # Detects Mutex, ConditionVariable, Monitor, and MonitorMixin
+      # synchronization operations. try_lock is treated as :info since
+      # it's non-blocking but indicates thread-oriented synchronization.
       class Synchronization < Base
         id 'FA1003'
-        severity :medium
+        severity :low
         default_confidence :high
-        description 'Thread synchronization primitives that may block the fiber scheduler thread'
+        description 'Thread synchronization may interfere with fiber scheduler cooperation'
 
         RULE_TITLE = 'Thread synchronization'
         RULE_CATEGORY = :synchronization
         TARGETS = OperationVocabulary::FA1003_TARGETS
-        TRY_LOCK_MSG = 'Mutex.try_lock is non-blocking but may indicate ' \
-                       'thread-oriented synchronization in fiber-scheduled code.'
-        NORMAL_MSG = 'Synchronization operation may block the thread running the fiber scheduler.'
+        TRY_LOCK_MSG = 'Mutex#try_lock is non-blocking but indicates thread-oriented ' \
+                       'synchronization that may not cooperate with the fiber scheduler.'
+        NORMAL_MSG = 'Blocking synchronization may stall the fiber scheduler thread; ' \
+                     'prefer scheduler-aware primitives.'
         REMEDIATION = 'Use scheduler-aware synchronization primitives, or verify ' \
-                      'contention and scheduler behaviour under load.'
+                      'contention behaviour under the active fiber scheduler.'
 
         def analyze(call_sites:)
           explicit_monitor_mixins = explicit_monitor_mixin_classes(call_sites)
@@ -98,7 +105,8 @@ module FiberAudit
         def build_finding(site, target, method)
           try_lock = target == 'Mutex' && method == :try_lock
           operation = "#{target}##{method}"
-          severity = try_lock ? :info : severity_for(:medium, site.execution_context)
+          # try_lock has fixed :info, no config override
+          severity = try_lock ? :info : advisory_severity(:low)
           confidence = try_lock ? :high : site.confidence
           message = try_lock ? TRY_LOCK_MSG : NORMAL_MSG
           evidence = Evidence.new(source: operation, message: message,

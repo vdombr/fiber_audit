@@ -20,6 +20,7 @@ module FiberAudit
         Open3
         IO
         Process
+        Process::Status
         Thread
         Mutex
         ConditionVariable

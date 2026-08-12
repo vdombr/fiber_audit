@@ -49,7 +49,7 @@ RSpec.describe FiberAudit::Static::Rules::DirectSocket do
     end
 
     it 'has correct severity' do
-      expect(described_class.severity).to eq(:medium)
+      expect(described_class.severity).to eq(:low)
     end
 
     it 'has correct default_confidence' do
@@ -201,29 +201,41 @@ RSpec.describe FiberAudit::Static::Rules::DirectSocket do
       end
     end
 
-    context 'execution context severity' do
-      it 'raises to :critical in :request context' do
+    context 'advisory severity (no context escalation)' do
+      it 'stays :low in :request context (no escalation)' do
         cs = build_call_site(execution_context: :request)
         findings = rule.analyze(call_sites: [cs])
-        expect(findings.first.severity).to eq(:critical)
+        expect(findings.first.severity).to eq(:low)
       end
 
-      it 'keeps :medium in :rake_task context' do
+      it 'stays :low in :rake_task context' do
         cs = build_call_site(execution_context: :rake_task)
         findings = rule.analyze(call_sites: [cs])
-        expect(findings.first.severity).to eq(:medium)
+        expect(findings.first.severity).to eq(:low)
       end
 
-      it 'raises to :critical in :middleware context' do
+      it 'stays :low in :middleware context (no escalation)' do
         cs = build_call_site(execution_context: :middleware)
         findings = rule.analyze(call_sites: [cs])
-        expect(findings.first.severity).to eq(:critical)
+        expect(findings.first.severity).to eq(:low)
       end
 
-      it 'raises to :high in :job context' do
+      it 'stays :low in :job context (no escalation)' do
         cs = build_call_site(execution_context: :job)
         findings = rule.analyze(call_sites: [cs])
-        expect(findings.first.severity).to eq(:high)
+        expect(findings.first.severity).to eq(:low)
+      end
+    end
+
+    context 'with configuration override' do
+      let(:configuration) do
+        instance_double(FiberAudit::Configuration, severity_override: :medium, rule_enabled?: true)
+      end
+
+      it 'applies configuration override without context ceiling' do
+        cs = build_call_site(execution_context: :request)
+        findings = rule.analyze(call_sites: [cs])
+        expect(findings.first.severity).to eq(:medium)
       end
     end
 
@@ -284,7 +296,7 @@ RSpec.describe FiberAudit::Static::Rules::DirectSocket do
         expect(finding.rule_id).to eq('FA1006')
         expect(finding.title).to eq('Direct socket creation')
         expect(finding.category).to eq(:network)
-        expect(finding.severity).to eq(:critical)
+        expect(finding.severity).to eq(:low)
         expect(finding.confidence).to eq(:high)
         expect(finding.operation).to eq('TCPSocket.new')
         expect(finding.execution_context).to eq(:request)

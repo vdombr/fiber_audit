@@ -12,15 +12,17 @@ module FiberAudit
       # FA1007: Detects blocking HTTP calls in request-like contexts.
       # Targets Net::HTTP.{get,get_response,start,request}, URI.open, OpenURI.open_uri.
       # Excludes Net::HTTP.get_print. Emits only for request/middleware/websocket/callback.
+      #
+      # Advisory rule with :medium default, no context ceiling.
       class NetHTTPInRequest < Base
         id 'FA1007'
-        severity :high
+        severity :medium
         default_confidence :high
-        description 'Blocking HTTP call in request path'
+        description 'Synchronous HTTP calls may bypass scheduler-aware I/O cooperation in request contexts'
 
         TITLE = 'Blocking HTTP call in request path'
         CATEGORY = :network
-        MESSAGE = 'Synchronous HTTP activity in a request-like context may block the thread running the fiber scheduler.'
+        MESSAGE = 'Synchronous HTTP activity may bypass scheduler-aware I/O cooperation in request-like contexts.'
         REMEDIATION = 'Use a scheduler-aware HTTP client, or move outbound HTTP work outside the request path.'
 
         NET_HTTP_METHODS = OperationVocabulary::FA1007_NET_HTTP_METHODS
@@ -82,7 +84,7 @@ module FiberAudit
         def build_finding(site, match)
           context = site.execution_context
           sev, conf = if match[:type] == :net_http
-                        [severity_for(:high, context), site.confidence]
+                        [advisory_severity(:medium), site.confidence]
                       else
                         %i[medium low]
                       end
