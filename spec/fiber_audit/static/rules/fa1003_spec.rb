@@ -87,8 +87,8 @@ RSpec.describe FiberAudit::Static::Rules::Synchronization do
       expect(described_class.id).to eq('FA1003')
     end
 
-    it 'has medium default severity' do
-      expect(described_class.severity).to eq(:medium)
+    it 'has low default severity' do
+      expect(described_class.severity).to eq(:low)
     end
 
     it 'has high default confidence' do
@@ -117,7 +117,7 @@ RSpec.describe FiberAudit::Static::Rules::Synchronization do
 
       expect(findings.size).to eq(1)
       expect(findings.first.operation).to eq('Mutex#lock')
-      expect(findings.first.message).to include('block the thread')
+      expect(findings.first.message).to include('scheduler-aware')
     end
 
     it 'detects Mutex#synchronize' do
@@ -306,36 +306,36 @@ RSpec.describe FiberAudit::Static::Rules::Synchronization do
     end
   end
 
-  # ── Severity and context escalation ───────────────────────────────────
-  describe 'severity escalation' do
-    it 'escalates to :critical in request context' do
+  # ── Advisory severity (no context escalation) ────────────────────────
+  describe 'advisory severity' do
+    it 'stays :low in request context (no escalation)' do
       site = build_site(
         receiver_source: 'mutex', receiver_constant: 'Mutex', method_name: :lock,
         execution_context: :request
       )
       findings = rule.analyze(call_sites: [site])
 
-      expect(findings.first.severity).to eq(:critical)
+      expect(findings.first.severity).to eq(:low)
     end
 
-    it 'escalates to :medium in rake_task context' do
+    it 'stays :low in middleware context (no escalation)' do
       site = build_site(
         receiver_source: 'mutex', receiver_constant: 'Mutex', method_name: :lock,
-        execution_context: :rake_task
+        execution_context: :middleware
       )
       findings = rule.analyze(call_sites: [site])
 
-      expect(findings.first.severity).to eq(:medium)
+      expect(findings.first.severity).to eq(:low)
     end
 
-    it 'keeps :medium in unknown context' do
+    it 'stays :low in unknown context' do
       site = build_site(
         receiver_source: 'mutex', receiver_constant: 'Mutex', method_name: :lock,
         execution_context: :unknown
       )
       findings = rule.analyze(call_sites: [site])
 
-      expect(findings.first.severity).to eq(:medium)
+      expect(findings.first.severity).to eq(:low)
     end
 
     it 'Mutex#try_lock stays :info even in request context (bypass)' do
@@ -349,10 +349,10 @@ RSpec.describe FiberAudit::Static::Rules::Synchronization do
       expect(findings.first.confidence).to eq(:high)
     end
 
-    it 'Mutex#try_lock stays :info in rake_task context (bypass)' do
+    it 'Mutex#try_lock stays :info in unknown context (bypass)' do
       site = build_site(
         receiver_source: 'mutex', receiver_constant: 'Mutex', method_name: :try_lock,
-        execution_context: :rake_task
+        execution_context: :unknown
       )
       findings = rule.analyze(call_sites: [site])
 
@@ -363,17 +363,17 @@ RSpec.describe FiberAudit::Static::Rules::Synchronization do
   # ── Configuration override ────────────────────────────────────────────
   describe 'configuration override' do
     let(:configuration) do
-      instance_double(FiberAudit::Configuration, severity_override: :low, rule_enabled?: true)
+      instance_double(FiberAudit::Configuration, severity_override: :medium, rule_enabled?: true)
     end
 
-    it 'applies configuration override for normal operations' do
+    it 'applies configuration override without context ceiling' do
       site = build_site(
         receiver_source: 'mutex', receiver_constant: 'Mutex', method_name: :lock,
-        execution_context: :unknown
+        execution_context: :request
       )
       findings = rule.analyze(call_sites: [site])
 
-      expect(findings.first.severity).to eq(:low)
+      expect(findings.first.severity).to eq(:medium)
     end
 
     it 'Mutex#try_lock bypasses configuration override' do
@@ -399,13 +399,13 @@ RSpec.describe FiberAudit::Static::Rules::Synchronization do
       expect(finding.rule_id).to eq('FA1003')
       expect(finding.title).to eq('Thread synchronization')
       expect(finding.category).to eq(:synchronization)
-      expect(finding.severity).to eq(:critical)
+      expect(finding.severity).to eq(:low)
       expect(finding.confidence).to eq(:high)
       expect(finding.location).to eq(site.location)
       expect(finding.symbol).to eq('Worker#perform')
       expect(finding.operation).to eq('Mutex#lock')
       expect(finding.execution_context).to eq(:request)
-      expect(finding.message).to include('block the thread')
+      expect(finding.message).to include('scheduler-aware')
       expect(finding.evidence).to be_an(Array)
       expect(finding.evidence.size).to eq(1)
       expect(finding.remediation).to include('scheduler-aware')
@@ -440,7 +440,7 @@ RSpec.describe FiberAudit::Static::Rules::Synchronization do
       evidence = finding.evidence.first
 
       expect(evidence.source).to eq('Mutex#lock')
-      expect(evidence.message).to include('block the thread')
+      expect(evidence.message).to include('scheduler-aware')
       expect(evidence.details).to include(
         receiver: 'mutex',
         method: 'lock',

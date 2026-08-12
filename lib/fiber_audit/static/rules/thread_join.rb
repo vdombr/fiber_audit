@@ -20,15 +20,17 @@ module FiberAudit
       # and workspace-shadowed Thread (checked via workspace or
       # workspace.semantic_index resolve_constant seam). Adapter errors from
       # those seams are swallowed — they never raise.
+      #
+      # Advisory rule: uses advisory_severity (no context ceiling), default :low.
       class ThreadJoin < Base
         id 'FA1002'
-        severity :high
+        severity :low
         confidence :high
-        description 'Waiting for a thread may block the thread running the fiber scheduler.'
+        description 'Thread waits do not cooperate with the fiber scheduler'
 
         TITLE    = 'Thread wait'
         CATEGORY = :synchronization
-        MESSAGE  = 'Waiting for a thread may block the thread running the fiber scheduler.'
+        MESSAGE  = 'Thread#join/value bypasses fiber scheduler cooperation and may stall the scheduler thread.'
         REMEDIATION = 'Replace thread waits with scheduler-aware coordination, ' \
                       'or move the work outside the fiber-scheduled path.'
         TARGET_METHODS  = OperationVocabulary::FA1002_METHODS
@@ -73,7 +75,7 @@ module FiberAudit
         def build_finding(site)
           loc  = site.location
           op   = "Thread.#{site.method_name}"
-          sev  = severity_for(self.class.severity, site.execution_context)
+          sev  = advisory_severity(self.class.severity)
           conf = site.receiver_source == 'Thread.current' ? :high : site.confidence
 
           Finding.new(

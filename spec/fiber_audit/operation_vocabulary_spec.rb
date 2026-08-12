@@ -15,12 +15,21 @@ RSpec.describe FiberAudit::OperationVocabulary do
     expect(FiberAudit::Static::Rules::BlockingSubprocess::TARGETS).to equal(described_class::FA1001_TARGETS)
     expect(FiberAudit::Static::Rules::ThreadJoin::CANONICAL_OPS).to equal(described_class::FA1002_OPERATIONS)
     expect(FiberAudit::Static::Rules::Synchronization::TARGETS).to equal(described_class::FA1003_TARGETS)
-    expect(FiberAudit::Static::Rules::ThreadCurrentState::INDEX_METHODS)
-      .to equal(described_class::FA1004_INDEX_METHODS)
+    expect(FiberAudit::Static::Rules::ThreadCurrentState::THREAD_VARIABLE_METHODS)
+      .to equal(described_class::FA1004_THREAD_VARIABLE_METHODS)
     expect(FiberAudit::Static::Rules::IOSelect::TARGETS).to equal(described_class::FA1005_TARGETS)
     expect(FiberAudit::Static::Rules::DirectSocket::EXACT).to equal(described_class::FA1006_EXACT)
     expect(FiberAudit::Static::Rules::NetHTTPInRequest::NET_HTTP_METHODS)
       .to equal(described_class::FA1007_NET_HTTP_METHODS)
+  end
+
+  it 'still defines FA1004_INDEX_METHODS for runtime vocabulary (even though static rule does not detect them)' do
+    expect(described_class::FA1004_INDEX_METHODS).to eq(%i[\[\] \[\]=].freeze)
+  end
+
+  it 'FA1001_TARGETS includes the full subprocess lifecycle (Process.spawn, exec, wait*, Process::Status)' do
+    expect(described_class::FA1001_TARGETS['Process']).to include(:spawn, :exec, :wait, :wait2, :waitpid, :waitpid2, :waitall, :detach)
+    expect(described_class::FA1001_TARGETS['Process::Status']).to eq(%i[wait].freeze)
   end
 
   it 'accepts the frozen Thread.current index operations in runtime events' do

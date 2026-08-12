@@ -10,20 +10,19 @@ module FiberAudit
   module Static
     module Rules
       # FA1006 – Detects direct socket creation that may bypass
-      # scheduler-aware networking and block the scheduler thread.
+      # scheduler-aware networking cooperation. Advisory rule with :low default.
       class DirectSocket < Base
         id 'FA1006'
-        severity :medium
+        severity :low
         default_confidence :high
-        description 'Detects direct socket creation that may bypass scheduler-aware networking.'
+        description 'Direct socket creation may not cooperate with scheduler-aware networking.'
 
         TITLE    = 'Direct socket creation'
         CATEGORY = :network
 
         EXACT = OperationVocabulary::FA1006_EXACT
 
-        MESSAGE = 'Direct socket use may bypass scheduler-aware networking ' \
-                  'and block the scheduler thread.'
+        MESSAGE = 'Direct socket use may bypass scheduler-aware networking cooperation and stall the scheduler thread.'
         REMEDIATION = 'Use scheduler-aware networking APIs or verify the ' \
                       'socket operations cooperate with the active Fiber scheduler.'
 
@@ -88,7 +87,7 @@ module FiberAudit
             rule_id: self.class.id,
             title: self.class.title,
             category: self.class.category,
-            severity: severity_for(:medium, ctx),
+            severity: advisory_severity(:low),
             confidence: site.confidence,
             location: site.location,
             symbol: site.enclosing_symbol,

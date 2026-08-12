@@ -206,8 +206,8 @@ RSpec.describe FiberAudit::Static::Rules::ThreadJoin do
       end
     end
 
-    context 'severity_for context ceiling' do
-      it 'raises to :critical in request context' do
+    context 'advisory severity (no context ceiling)' do
+      it 'stays :low in request context (no escalation)' do
         cs = build_call_site(
           receiver_source: 'Thread.new',
           receiver_constant: 'Thread',
@@ -215,21 +215,10 @@ RSpec.describe FiberAudit::Static::Rules::ThreadJoin do
           execution_context: :request
         )
         findings = rule.analyze(call_sites: [cs])
-        expect(findings.first.severity).to eq(:critical)
+        expect(findings.first.severity).to eq(:low)
       end
 
-      it 'stays :high in rake_task context' do
-        cs = build_call_site(
-          receiver_source: 'Thread.new',
-          receiver_constant: 'Thread',
-          method_name: :join,
-          execution_context: :rake_task
-        )
-        findings = rule.analyze(call_sites: [cs])
-        expect(findings.first.severity).to eq(:high)
-      end
-
-      it 'raises to :critical in middleware context' do
+      it 'stays :low in middleware context (no escalation)' do
         cs = build_call_site(
           receiver_source: 'Thread.new',
           receiver_constant: 'Thread',
@@ -237,10 +226,10 @@ RSpec.describe FiberAudit::Static::Rules::ThreadJoin do
           execution_context: :middleware
         )
         findings = rule.analyze(call_sites: [cs])
-        expect(findings.first.severity).to eq(:critical)
+        expect(findings.first.severity).to eq(:low)
       end
 
-      it 'stays :high in callback context' do
+      it 'stays :low in callback context' do
         cs = build_call_site(
           receiver_source: 'Thread.new',
           receiver_constant: 'Thread',
@@ -248,7 +237,42 @@ RSpec.describe FiberAudit::Static::Rules::ThreadJoin do
           execution_context: :callback
         )
         findings = rule.analyze(call_sites: [cs])
-        expect(findings.first.severity).to eq(:high)
+        expect(findings.first.severity).to eq(:low)
+      end
+
+      it 'stays :low in unknown context' do
+        cs = build_call_site(
+          receiver_source: 'Thread.new',
+          receiver_constant: 'Thread',
+          method_name: :join,
+          execution_context: :unknown
+        )
+        findings = rule.analyze(call_sites: [cs])
+        expect(findings.first.severity).to eq(:low)
+      end
+    end
+
+    context 'with configuration override' do
+      let(:override_config) do
+        instance_double(FiberAudit::Configuration, severity_override: :medium)
+      end
+      let(:rule_with_override) do
+        described_class.new(
+          workspace: workspace,
+          context_resolver: context_resolver,
+          configuration: override_config
+        )
+      end
+
+      it 'applies configuration override without context ceiling' do
+        cs = build_call_site(
+          receiver_source: 'Thread.new',
+          receiver_constant: 'Thread',
+          method_name: :join,
+          execution_context: :request
+        )
+        findings = rule_with_override.analyze(call_sites: [cs])
+        expect(findings.first.severity).to eq(:medium)
       end
     end
 
@@ -305,7 +329,9 @@ RSpec.describe FiberAudit::Static::Rules::ThreadJoin do
         expect(finding.symbol).to eq('TestClass#test_method')
         expect(finding.operation).to eq('Thread.join')
         expect(finding.execution_context).to eq(:request)
-        expect(finding.message).to eq('Waiting for a thread may block the thread running the fiber scheduler.')
+        expect(finding.message).to eq(
+          'Thread#join/value bypasses fiber scheduler cooperation and may stall the scheduler thread.'
+        )
         expect(finding.evidence).to be_an(Array)
         expect(finding.evidence).not_to be_empty
         expect(finding.remediation).to eq(
@@ -457,7 +483,7 @@ RSpec.describe FiberAudit::Static::Rules::ThreadJoin do
     end
 
     it 'has correct default severity' do
-      expect(described_class.severity).to eq(:high)
+      expect(described_class.severity).to eq(:low)
     end
 
     it 'has correct default confidence' do
@@ -465,7 +491,7 @@ RSpec.describe FiberAudit::Static::Rules::ThreadJoin do
     end
 
     it 'has correct description' do
-      expect(described_class.description).to eq('Waiting for a thread may block the thread running the fiber scheduler.')
+      expect(described_class.description).to eq('Thread waits do not cooperate with the fiber scheduler')
     end
 
     it 'has correct title constant' do

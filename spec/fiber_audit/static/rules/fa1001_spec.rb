@@ -55,7 +55,7 @@ RSpec.describe FiberAudit::Static::Rules::BlockingSubprocess do
     end
 
     it 'has correct default severity' do
-      expect(described_class.severity).to eq(:high)
+      expect(described_class.severity).to eq(:medium)
     end
 
     it 'has correct default confidence' do
@@ -67,46 +67,132 @@ RSpec.describe FiberAudit::Static::Rules::BlockingSubprocess do
     end
   end
 
+  describe 'taxonomy' do
+    it 'defines OPERATION_CATEGORY for all targets' do
+      expect(described_class::OPERATION_CATEGORY).to be_a(Hash)
+      expect(described_class::OPERATION_CATEGORY).not_to be_empty
+    end
+
+    it 'defines CATEGORY_METADATA for all categories' do
+      expect(described_class::CATEGORY_METADATA).to be_a(Hash)
+      expect(described_class::CATEGORY_METADATA.keys).to contain_exactly(
+        :creation, :replacement, :waiting, :detach, :stream
+      )
+    end
+
+    it 'assigns info severity to creation operations' do
+      expect(described_class::CATEGORY_METADATA[:creation][:severity]).to eq(:info)
+    end
+
+    it 'assigns info severity to replacement operations' do
+      expect(described_class::CATEGORY_METADATA[:replacement][:severity]).to eq(:info)
+    end
+
+    it 'assigns info severity to detach operations' do
+      expect(described_class::CATEGORY_METADATA[:detach][:severity]).to eq(:info)
+    end
+
+    it 'assigns medium severity to waiting operations' do
+      expect(described_class::CATEGORY_METADATA[:waiting][:severity]).to eq(:medium)
+    end
+
+    it 'assigns medium severity to stream operations' do
+      expect(described_class::CATEGORY_METADATA[:stream][:severity]).to eq(:medium)
+    end
+  end
+
   describe '#analyze' do
-    context 'with explicit Kernel calls' do
-      %i[system exec spawn].each do |method|
-        it "detects Kernel.#{method}" do
-          cs = make_call_site(receiver_constant: 'Kernel', method_name: method)
-          findings = rule.analyze(call_sites: [cs])
-          expect(findings.size).to eq(1)
-          expect(findings.first.operation).to eq("Kernel.#{method}")
-        end
-      end
-    end
-
-    context 'with Open3 calls' do
-      %i[capture2 capture2e capture3 pipeline].each do |method|
-        it "detects Open3.#{method}" do
-          cs = make_call_site(receiver_constant: 'Open3', method_name: method)
-          findings = rule.analyze(call_sites: [cs])
-          expect(findings.size).to eq(1)
-          expect(findings.first.operation).to eq("Open3.#{method}")
-        end
-      end
-    end
-
-    context 'with IO.popen' do
-      it 'detects IO.popen' do
-        cs = make_call_site(receiver_constant: 'IO', method_name: :popen)
+    context 'with creation operations' do
+      it 'detects Kernel.spawn as creation' do
+        cs = make_call_site(receiver_constant: 'Kernel', method_name: :spawn)
         findings = rule.analyze(call_sites: [cs])
         expect(findings.size).to eq(1)
-        expect(findings.first.operation).to eq('IO.popen')
+        expect(findings.first.operation).to eq('Kernel.spawn')
+        expect(findings.first.evidence.first.details[:semantic]).to eq(:creation)
+      end
+
+      it 'detects Process.spawn as creation' do
+        cs = make_call_site(receiver_constant: 'Process', method_name: :spawn)
+        findings = rule.analyze(call_sites: [cs])
+        expect(findings.size).to eq(1)
+        expect(findings.first.operation).to eq('Process.spawn')
+        expect(findings.first.evidence.first.details[:semantic]).to eq(:creation)
       end
     end
 
-    context 'with Process calls' do
-      %i[waitall detach].each do |method|
-        it "detects Process.#{method}" do
+    context 'with replacement operations' do
+      it 'detects Kernel.exec as replacement' do
+        cs = make_call_site(receiver_constant: 'Kernel', method_name: :exec)
+        findings = rule.analyze(call_sites: [cs])
+        expect(findings.size).to eq(1)
+        expect(findings.first.operation).to eq('Kernel.exec')
+        expect(findings.first.evidence.first.details[:semantic]).to eq(:replacement)
+      end
+
+      it 'detects Process.exec as replacement' do
+        cs = make_call_site(receiver_constant: 'Process', method_name: :exec)
+        findings = rule.analyze(call_sites: [cs])
+        expect(findings.size).to eq(1)
+        expect(findings.first.operation).to eq('Process.exec')
+        expect(findings.first.evidence.first.details[:semantic]).to eq(:replacement)
+      end
+    end
+
+    context 'with waiting operations' do
+      it 'detects Kernel.system as waiting' do
+        cs = make_call_site(receiver_constant: 'Kernel', method_name: :system)
+        findings = rule.analyze(call_sites: [cs])
+        expect(findings.size).to eq(1)
+        expect(findings.first.operation).to eq('Kernel.system')
+        expect(findings.first.evidence.first.details[:semantic]).to eq(:waiting)
+      end
+
+      %i[wait wait2 waitpid waitpid2 waitall].each do |method|
+        it "detects Process.#{method} as waiting" do
           cs = make_call_site(receiver_constant: 'Process', method_name: method)
           findings = rule.analyze(call_sites: [cs])
           expect(findings.size).to eq(1)
           expect(findings.first.operation).to eq("Process.#{method}")
+          expect(findings.first.evidence.first.details[:semantic]).to eq(:waiting)
         end
+      end
+
+      it 'detects Process::Status.wait as waiting' do
+        cs = make_call_site(receiver_constant: 'Process::Status', method_name: :wait)
+        findings = rule.analyze(call_sites: [cs])
+        expect(findings.size).to eq(1)
+        expect(findings.first.operation).to eq('Process::Status.wait')
+        expect(findings.first.evidence.first.details[:semantic]).to eq(:waiting)
+      end
+
+      %i[capture2 capture2e capture3 pipeline].each do |method|
+        it "detects Open3.#{method} as waiting" do
+          cs = make_call_site(receiver_constant: 'Open3', method_name: method)
+          findings = rule.analyze(call_sites: [cs])
+          expect(findings.size).to eq(1)
+          expect(findings.first.operation).to eq("Open3.#{method}")
+          expect(findings.first.evidence.first.details[:semantic]).to eq(:waiting)
+        end
+      end
+    end
+
+    context 'with detach operations' do
+      it 'detects Process.detach as detach' do
+        cs = make_call_site(receiver_constant: 'Process', method_name: :detach)
+        findings = rule.analyze(call_sites: [cs])
+        expect(findings.size).to eq(1)
+        expect(findings.first.operation).to eq('Process.detach')
+        expect(findings.first.evidence.first.details[:semantic]).to eq(:detach)
+      end
+    end
+
+    context 'with stream operations' do
+      it 'detects IO.popen as stream' do
+        cs = make_call_site(receiver_constant: 'IO', method_name: :popen)
+        findings = rule.analyze(call_sites: [cs])
+        expect(findings.size).to eq(1)
+        expect(findings.first.operation).to eq('IO.popen')
+        expect(findings.first.evidence.first.details[:semantic]).to eq(:stream)
       end
     end
 
@@ -203,35 +289,47 @@ RSpec.describe FiberAudit::Static::Rules::BlockingSubprocess do
       end
     end
 
-    context 'with severity upgrades' do
-      it 'upgrades to critical in request context' do
+    context 'with severity by category and context' do
+      it 'creation (info) raises to critical in request context' do
+        cs = make_call_site(receiver_constant: 'Kernel', method_name: :spawn, execution_context: :request)
+        findings = rule.analyze(call_sites: [cs])
+        expect(findings.first.severity).to eq(:critical)
+      end
+
+      it 'replacement (info) raises to critical in request context' do
+        cs = make_call_site(receiver_constant: 'Kernel', method_name: :exec, execution_context: :request)
+        findings = rule.analyze(call_sites: [cs])
+        expect(findings.first.severity).to eq(:critical)
+      end
+
+      it 'waiting (medium) raises to critical in request context' do
         cs = make_call_site(receiver_constant: 'Kernel', method_name: :system, execution_context: :request)
         findings = rule.analyze(call_sites: [cs])
         expect(findings.first.severity).to eq(:critical)
       end
 
-      it 'upgrades to critical in middleware context' do
-        cs = make_call_site(receiver_constant: 'Kernel', method_name: :system, execution_context: :middleware)
+      it 'detach (info) stays info in unknown context' do
+        cs = make_call_site(receiver_constant: 'Process', method_name: :detach, execution_context: :unknown)
         findings = rule.analyze(call_sites: [cs])
-        expect(findings.first.severity).to eq(:critical)
+        expect(findings.first.severity).to eq(:info)
       end
 
-      it 'keeps high in rake_task context' do
-        cs = make_call_site(receiver_constant: 'Kernel', method_name: :system, execution_context: :rake_task)
+      it 'stream (medium) stays medium in unknown context' do
+        cs = make_call_site(receiver_constant: 'IO', method_name: :popen, execution_context: :unknown)
+        findings = rule.analyze(call_sites: [cs])
+        expect(findings.first.severity).to eq(:medium)
+      end
+
+      it 'waiting (medium) raises to high in job context' do
+        cs = make_call_site(receiver_constant: 'Process', method_name: :wait, execution_context: :job)
         findings = rule.analyze(call_sites: [cs])
         expect(findings.first.severity).to eq(:high)
       end
 
-      it 'keeps high in job context' do
-        cs = make_call_site(receiver_constant: 'Kernel', method_name: :system, execution_context: :job)
+      it 'creation (info) stays low in rake_task context' do
+        cs = make_call_site(receiver_constant: 'Process', method_name: :spawn, execution_context: :rake_task)
         findings = rule.analyze(call_sites: [cs])
-        expect(findings.first.severity).to eq(:high)
-      end
-
-      it 'keeps high in unknown context' do
-        cs = make_call_site(receiver_constant: 'Kernel', method_name: :system, execution_context: :unknown)
-        findings = rule.analyze(call_sites: [cs])
-        expect(findings.first.severity).to eq(:high)
+        expect(findings.first.severity).to eq(:low)
       end
     end
 
@@ -256,52 +354,124 @@ RSpec.describe FiberAudit::Static::Rules::BlockingSubprocess do
     end
 
     context 'with finding attributes' do
-      let(:cs) { make_call_site(receiver_constant: 'Kernel', method_name: :system) }
-      let(:finding) { rule.analyze(call_sites: [cs]).first }
+      context 'for waiting category' do
+        let(:cs) { make_call_site(receiver_constant: 'Kernel', method_name: :system) }
+        let(:finding) { rule.analyze(call_sites: [cs]).first }
 
-      it 'has correct title' do
-        expect(finding.title).to eq('Blocking subprocess call')
+        it 'has correct title' do
+          expect(finding.title).to eq('Subprocess wait')
+        end
+
+        it 'has correct category' do
+          expect(finding.category).to eq(:subprocess)
+        end
+
+        it 'has correct message' do
+          expect(finding.message).to eq('Waiting for a subprocess may block the thread running the fiber scheduler.')
+        end
+
+        it 'has correct remediation' do
+          expect(finding.remediation).to eq(
+            'Use scheduler-aware subprocess APIs or move waits outside the fiber-scheduled path.'
+          )
+        end
+
+        it 'has non-empty evidence with semantic category' do
+          expect(finding.evidence).not_to be_empty
+          expect(finding.evidence.first.source).to eq(:static)
+          expect(finding.evidence.first.message).to eq('Matched Kernel.system (waiting)')
+          expect(finding.evidence.first.details[:semantic]).to eq(:waiting)
+        end
       end
 
-      it 'has correct category' do
-        expect(finding.category).to eq(:subprocess)
+      context 'for creation category' do
+        let(:cs) { make_call_site(receiver_constant: 'Process', method_name: :spawn) }
+        let(:finding) { rule.analyze(call_sites: [cs]).first }
+
+        it 'has correct title' do
+          expect(finding.title).to eq('Subprocess creation')
+        end
+
+        it 'has correct message' do
+          expect(finding.message).to eq(
+            'Spawning a subprocess may leave background processes that outlive the fiber scheduler session.'
+          )
+        end
+
+        it 'has correct remediation' do
+          expect(finding.remediation).to eq(
+            'Track spawned processes or move subprocess creation outside the fiber-scheduled path.'
+          )
+        end
       end
 
-      it 'has correct message' do
-        expect(finding.message).to eq('Subprocess operation may block the thread running the fiber scheduler.')
+      context 'for replacement category' do
+        let(:cs) { make_call_site(receiver_constant: 'Kernel', method_name: :exec) }
+        let(:finding) { rule.analyze(call_sites: [cs]).first }
+
+        it 'has correct title' do
+          expect(finding.title).to eq('Process replacement')
+        end
+
+        it 'has correct message' do
+          expect(finding.message).to eq(
+            'Process replacement via exec replaces the current process image, terminating the fiber scheduler.'
+          )
+        end
       end
 
-      it 'has correct remediation' do
-        expect(finding.remediation).to eq(
-          'Move long-running subprocess work outside the request path, ' \
-          'or verify scheduler behaviour under load.'
-        )
+      context 'for detach category' do
+        let(:cs) { make_call_site(receiver_constant: 'Process', method_name: :detach) }
+        let(:finding) { rule.analyze(call_sites: [cs]).first }
+
+        it 'has correct title' do
+          expect(finding.title).to eq('Subprocess detach')
+        end
+
+        it 'has correct message' do
+          expect(finding.message).to eq(
+            'Detaching a subprocess may leave it unmanaged by the fiber scheduler.'
+          )
+        end
       end
 
-      it 'has non-empty evidence' do
-        expect(finding.evidence).not_to be_empty
-        expect(finding.evidence.first.source).to eq(:static)
-        expect(finding.evidence.first.message).to eq('Matched Kernel.system')
-      end
+      context 'for stream category' do
+        let(:cs) { make_call_site(receiver_constant: 'IO', method_name: :popen) }
+        let(:finding) { rule.analyze(call_sites: [cs]).first }
 
-      it 'has correct operation' do
-        expect(finding.operation).to eq('Kernel.system')
+        it 'has correct title' do
+          expect(finding.title).to eq('Subprocess pipe stream')
+        end
+
+        it 'has correct message' do
+          expect(finding.message).to eq(
+            'Subprocess pipe I/O may block the fiber scheduler thread while the stream is open.'
+          )
+        end
       end
 
       it 'has location from call site' do
+        cs = make_call_site(receiver_constant: 'Kernel', method_name: :system)
+        finding = rule.analyze(call_sites: [cs]).first
         expect(finding.location.path).to eq('app/models/user.rb')
         expect(finding.location.line).to eq(10)
       end
 
       it 'has symbol from call site' do
+        cs = make_call_site(receiver_constant: 'Kernel', method_name: :system)
+        finding = rule.analyze(call_sites: [cs]).first
         expect(finding.symbol).to eq('User#process')
       end
 
       it 'has execution context from call site' do
+        cs = make_call_site(receiver_constant: 'Kernel', method_name: :system)
+        finding = rule.analyze(call_sites: [cs]).first
         expect(finding.execution_context).to eq(:request)
       end
 
       it 'has rule_id' do
+        cs = make_call_site(receiver_constant: 'Kernel', method_name: :system)
+        finding = rule.analyze(call_sites: [cs]).first
         expect(finding.rule_id).to eq('FA1001')
       end
     end
