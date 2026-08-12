@@ -10,14 +10,14 @@ module FiberAudit
         # Ruby's scheduler API fixes this writer-like method name.
         # rubocop:disable Naming/AccessorMethodName
         def set_scheduler(scheduler)
-          FiberAudit::Runtime::SchedulerObserver.scheduler_replacing(thread: Thread.current) if Fiber.scheduler
+          previous = Fiber.scheduler
           result = super
-          if scheduler
-            FiberAudit::Runtime::SchedulerObserver.scheduler_installed(
-              scheduler: scheduler,
-              thread: Thread.current
-            )
-          end
+          current = Fiber.scheduler
+          FiberAudit::Runtime::SchedulerObserver.scheduler_changed(
+            previous: previous,
+            current: current,
+            thread: Thread.current
+          )
           result
         end
         # rubocop:enable Naming/AccessorMethodName
@@ -25,7 +25,10 @@ module FiberAudit
 
       module SchedulerCloseHook
         def close(...)
-          FiberAudit::Runtime::SchedulerObserver.scheduler_closing(thread: Thread.current)
+          FiberAudit::Runtime::SchedulerObserver.scheduler_closing(
+            scheduler: self,
+            thread: Thread.current
+          )
           super
         end
       end
@@ -41,19 +44,15 @@ module FiberAudit
           observer
         end
 
-        def scheduler_replacing(thread:)
-          current_for_process&.scheduler_closing(thread: thread)
-        end
-
-        def scheduler_installed(scheduler:, thread:)
+        def scheduler_changed(previous:, current:, thread:)
           observer = current_for_process
           return unless observer
 
-          observer.scheduler_installed(scheduler: scheduler, thread: thread)
+          observer.scheduler_changed(previous: previous, current: current, thread: thread)
         end
 
-        def scheduler_closing(thread:)
-          current_for_process&.scheduler_closing(thread: thread)
+        def scheduler_closing(thread:, scheduler: nil)
+          current_for_process&.scheduler_closing(scheduler: scheduler, thread: thread)
         end
 
         def deactivate(observer)
@@ -82,6 +81,8 @@ module FiberAudit
         @watchdog = watchdog
         @owner_pid = Process.pid
         @active = true
+        @mutex = Mutex.new
+        @schedulers = {}
       end
 
       def active_for_current_process?
@@ -94,8 +95,17 @@ module FiberAudit
         self
       end
 
+      def scheduler_changed(previous:, current:, thread:)
+        return self unless active_for_current_process?
+
+        scheduler_closing(scheduler: previous, thread: thread) if previous && !previous.equal?(current)
+        scheduler_installed(scheduler: current, thread: thread) if current
+        self
+      end
+
       def scheduler_installed(scheduler:, thread:)
         return self unless active_for_current_process? && watchdog.enabled?
+        return self unless track_scheduler(scheduler, thread)
 
         install_close_hook!(scheduler)
         watchdog.scheduler_installed(thread: thread)
@@ -107,13 +117,17 @@ module FiberAudit
         self
       end
 
-      def scheduler_closing(thread:)
-        watchdog.scheduler_closing(thread: thread) if active_for_current_process?
+      def scheduler_closing(thread:, scheduler: nil)
+        return self unless active_for_current_process?
+        return self unless untrack_scheduler(scheduler, thread)
+
+        watchdog.scheduler_closing(thread: thread)
         self
       end
 
       def deactivate
         @active = false
+        @mutex.synchronize { @schedulers.clear }
         self
       end
 
@@ -122,6 +136,28 @@ module FiberAudit
       def install_close_hook!(scheduler)
         singleton = scheduler.singleton_class
         singleton.prepend(SchedulerCloseHook) unless singleton.ancestors.include?(SchedulerCloseHook)
+      end
+
+      def track_scheduler(scheduler, thread)
+        @mutex.synchronize do
+          key = thread.object_id
+          return false if @schedulers[key].equal?(scheduler)
+
+          @schedulers[key] = scheduler
+          true
+        end
+      end
+
+      def untrack_scheduler(scheduler, thread)
+        @mutex.synchronize do
+          key = thread.object_id
+          tracked = @schedulers[key]
+          return false unless tracked
+          return false if scheduler && !tracked.equal?(scheduler)
+
+          @schedulers.delete(key)
+          true
+        end
       end
     end
   end

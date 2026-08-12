@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+## 0.3.0 (2026-08-12)
+
+### Changed
+
+- Reframed static rules as scheduler-cooperation requirements. Advisory rules no
+  longer escalate solely because they appear in request-like execution contexts.
+- Split FA1001 under its existing rule ID into subprocess creation, replacement,
+  waiting, detach, and stream lifecycle semantics; added Process `spawn`, `exec`,
+  `wait`, `wait2`, `waitpid`, `waitpid2`, and `Process::Status.wait` coverage.
+- Corrected FA1004 to report only true Thread variables. `Thread.current[]` and
+  `Thread.current[]=` are Fiber-local and are no longer static or runtime findings.
+- Propagated Rails/runtime execution context into child Fibers through immutable
+  Ruby Fiber storage, with explicit current-Fiber `clear!`/`reset!` behavior.
+- Added scheduler presence, blocking-Fiber state, and optional scheduler-hook
+  capability measurements to targeted operation events.
+- Added bounded `scheduler_stall_operation_overlap` JSONL 1.0 events. They record
+  temporal overlap between a watchdog stall and active operations, not causality.
+- Reconciled scheduler observer state only after `Fiber.set_scheduler` accepts a
+  change, so rejected replacement attempts preserve the previous observation.
+- Added Ruby 4.0 to the required CI matrix and executable local scheduler-semantic
+  reproductions under `script/scheduler-semantics`.
+
 ## 0.2.1 (2026-08-12)
 
 ### Fixed

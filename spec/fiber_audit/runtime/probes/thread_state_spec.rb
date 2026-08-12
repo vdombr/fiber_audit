@@ -9,7 +9,7 @@ RSpec.describe FiberAudit::Runtime::Probes::ThreadState do
     stop_probe_runtime(@runtime) if @runtime
   end
 
-  it 'preserves Thread.current index values without retaining keys or values' do
+  it 'preserves Thread.current index values without observation or retaining keys or values' do
     @runtime = start_probe_runtime
     value = Object.new
     thread_variables_before = Thread.current.thread_variables
@@ -17,7 +17,8 @@ RSpec.describe FiberAudit::Runtime::Probes::ThreadState do
     expect(Thread.current[:fiber_audit_stage5_key] = value).to equal(value)
     expect(Thread.current[:fiber_audit_stage5_key]).to equal(value)
 
-    expect(operations(@runtime)).to eq(%w[Thread.current.[]= Thread.current.[]])
+    # Thread.current index access is not observed after v0.3 alignment
+    expect(operations(@runtime)).to eq([])
     expect(Thread.current.thread_variables).to eq(thread_variables_before)
     expect(@runtime.io.string).not_to include('fiber_audit_stage5_key')
   end

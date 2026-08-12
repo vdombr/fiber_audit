@@ -9,19 +9,19 @@ require_relative '../../operation_vocabulary'
 module FiberAudit
   module Static
     module Rules
-      # FA1005: Detects explicit IO.select calls that may bypass
-      # scheduler-aware I/O cooperation. Advisory rule with :medium default.
+      # FA1005: Detects explicit IO.select scheduler-capability requirements.
+      # Advisory rule with :medium default.
       class IOSelect < Base
         id 'FA1005'
         severity :medium
         default_confidence :high
-        description 'Explicit IO.select bypasses scheduler-aware I/O cooperation'
+        description 'Explicit IO.select requires scheduler io_select cooperation'
 
         TITLE    = 'Explicit IO.select call'
         CATEGORY = :blocking_io
 
-        MESSAGE = 'Explicit IO.select bypasses scheduler-aware I/O cooperation and may stall the scheduler thread.'
-        REMEDIATION = 'Use scheduler-aware I/O APIs or allow the active Fiber scheduler to manage readiness.'
+        MESSAGE = 'IO.select requires scheduler io_select support when used from a non-blocking Fiber.'
+        REMEDIATION = 'Verify the selected scheduler implements io_select and confirm runtime progress under load.'
 
         TARGETS = OperationVocabulary::FA1005_TARGETS
 

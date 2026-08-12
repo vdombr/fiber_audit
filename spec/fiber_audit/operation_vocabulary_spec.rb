@@ -28,7 +28,9 @@ RSpec.describe FiberAudit::OperationVocabulary do
   end
 
   it 'FA1001_TARGETS includes the full subprocess lifecycle (Process.spawn, exec, wait*, Process::Status)' do
-    expect(described_class::FA1001_TARGETS['Process']).to include(:spawn, :exec, :wait, :wait2, :waitpid, :waitpid2, :waitall, :detach)
+    expect(described_class::FA1001_TARGETS['Process']).to include(
+      :spawn, :exec, :wait, :wait2, :waitpid, :waitpid2, :waitall, :detach
+    )
     expect(described_class::FA1001_TARGETS['Process::Status']).to eq(%i[wait].freeze)
   end
 

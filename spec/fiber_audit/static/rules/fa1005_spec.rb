@@ -282,10 +282,10 @@ RSpec.describe FiberAudit::Static::Rules::IOSelect do
         expect(finding.location.line).to eq(42)
         expect(finding.location.column).to eq(6)
         expect(finding.message).to eq(
-          'Explicit IO.select bypasses scheduler-aware I/O cooperation and may stall the scheduler thread.'
+          'IO.select requires scheduler io_select support when used from a non-blocking Fiber.'
         )
         expect(finding.remediation).to eq(
-          'Use scheduler-aware I/O APIs or allow the active Fiber scheduler to manage readiness.'
+          'Verify the selected scheduler implements io_select and confirm runtime progress under load.'
         )
         expect(finding.evidence.size).to eq(1)
         expect(finding.evidence.first.source).to eq('static_analysis')

@@ -2,6 +2,7 @@
 
 require_relative 'event'
 require_relative 'location'
+require_relative 'scheduler_snapshot'
 require_relative 'validation'
 
 module FiberAudit
@@ -19,7 +20,8 @@ module FiberAudit
         :operation,
         :location,
         :execution_context,
-        :started_monotonic_ns
+        :started_monotonic_ns,
+        :scheduler_snapshot
       )
 
       def initialize(pid_source: Process.method(:pid), capacity: MAX_ENTRIES, snapshot_limit: MAX_SNAPSHOT)
@@ -38,7 +40,8 @@ module FiberAudit
         location: nil,
         execution_context: :unknown,
         thread: Thread.current,
-        fiber: Fiber.current
+        fiber: Fiber.current,
+        scheduler_snapshot: nil
       )
         ensure_current_process!
         values = normalize_entry(
@@ -47,7 +50,8 @@ module FiberAudit
           execution_context: execution_context,
           monotonic_ns: monotonic_ns,
           thread: thread,
-          fiber: fiber
+          fiber: fiber,
+          scheduler_snapshot: scheduler_snapshot
         )
 
         @mutex.synchronize do
@@ -90,7 +94,7 @@ module FiberAudit
 
       private
 
-      def normalize_entry(operation:, location:, execution_context:, monotonic_ns:, thread:, fiber:)
+      def normalize_entry(operation:, location:, execution_context:, monotonic_ns:, thread:, fiber:, scheduler_snapshot: nil)
         canonical_operation = Validation.operation(operation)
         unless location.nil? || location.is_a?(Location)
           raise RuntimeContractError, 'location must be a FiberAudit::Runtime::Location or nil'
@@ -103,14 +107,24 @@ module FiberAudit
           raise RuntimeContractError, 'thread and fiber identities are invalid'
         end
 
+        normalized_snapshot = normalize_scheduler_snapshot(scheduler_snapshot)
+
         {
           thread_id: Validation.integer(thread.object_id, 'thread_id'),
           fiber_id: Validation.integer(fiber.object_id, 'fiber_id'),
           operation: canonical_operation,
           location: location,
           execution_context: normalized_context,
-          started_monotonic_ns: Validation.integer(monotonic_ns, 'monotonic_ns')
+          started_monotonic_ns: Validation.integer(monotonic_ns, 'monotonic_ns'),
+          scheduler_snapshot: normalized_snapshot
         }
+      end
+
+      def normalize_scheduler_snapshot(value)
+        return value if value.nil?
+        return value if value.is_a?(SchedulerSnapshot)
+
+        raise RuntimeContractError, 'scheduler_snapshot must be a FiberAudit::Runtime::SchedulerSnapshot or nil'
       end
 
       def ensure_current_process!

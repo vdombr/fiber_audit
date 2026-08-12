@@ -24,7 +24,7 @@ module FiberAudit
         CATEGORY = :thread_local
         MESSAGE = 'Thread thread variables are shared across all fibers on the same thread ' \
                   'and may leak request-local data between concurrent requests.'
-        REMEDIATION = 'Prefer fiber-local storage (Fiber.current[:key]) or framework-provided ' \
+        REMEDIATION = 'Prefer fiber-local storage (Fiber[:key]) or framework-provided ' \
                       'request-local state over thread_variable_get/set.'
 
         THREAD_VARIABLE_METHODS = OperationVocabulary::FA1004_THREAD_VARIABLE_METHODS

@@ -9,7 +9,7 @@ require_relative '../../operation_vocabulary'
 module FiberAudit
   module Static
     module Rules
-      # FA1002: Thread#join / Thread#value may block the fiber-scheduler thread.
+      # FA1002: Thread#join / Thread#value are scheduler coordination points.
       #
       # Matches join/value on Thread instances whose receiver_constant is
       # 'Thread' but whose receiver_source is not the bare literal 'Thread'.
@@ -26,13 +26,13 @@ module FiberAudit
         id 'FA1002'
         severity :low
         confidence :high
-        description 'Thread waits do not cooperate with the fiber scheduler'
+        description 'Thread waits require scheduler block/unblock cooperation'
 
         TITLE    = 'Thread wait'
         CATEGORY = :synchronization
-        MESSAGE  = 'Thread#join/value bypasses fiber scheduler cooperation and may stall the scheduler thread.'
-        REMEDIATION = 'Replace thread waits with scheduler-aware coordination, ' \
-                      'or move the work outside the fiber-scheduled path.'
+        MESSAGE  = 'Thread#join/value requires scheduler block/unblock cooperation in a non-blocking Fiber.'
+        REMEDIATION = 'Verify scheduler coordination and runtime progress, ' \
+                      'or move the wait outside the fiber-scheduled path.'
         TARGET_METHODS  = OperationVocabulary::FA1002_METHODS
         CANONICAL_OPS   = OperationVocabulary::FA1002_OPERATIONS
         DIRECT_CLASS_SOURCE = 'Thread'

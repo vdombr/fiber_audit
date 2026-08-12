@@ -289,47 +289,28 @@ RSpec.describe FiberAudit::Static::Rules::BlockingSubprocess do
       end
     end
 
-    context 'with severity by category and context' do
-      it 'creation (info) raises to critical in request context' do
-        cs = make_call_site(receiver_constant: 'Kernel', method_name: :spawn, execution_context: :request)
-        findings = rule.analyze(call_sites: [cs])
-        expect(findings.first.severity).to eq(:critical)
+    context 'with advisory severity independent of execution context' do
+      it 'keeps creation informational in request and rake contexts' do
+        request = make_call_site(receiver_constant: 'Kernel', method_name: :spawn, execution_context: :request)
+        rake = make_call_site(receiver_constant: 'Process', method_name: :spawn, execution_context: :rake_task)
+        expect(rule.analyze(call_sites: [request, rake]).map(&:severity)).to eq(%i[info info])
       end
 
-      it 'replacement (info) raises to critical in request context' do
+      it 'keeps replacement informational in request context' do
         cs = make_call_site(receiver_constant: 'Kernel', method_name: :exec, execution_context: :request)
-        findings = rule.analyze(call_sites: [cs])
-        expect(findings.first.severity).to eq(:critical)
+        expect(rule.analyze(call_sites: [cs]).first.severity).to eq(:info)
       end
 
-      it 'waiting (medium) raises to critical in request context' do
-        cs = make_call_site(receiver_constant: 'Kernel', method_name: :system, execution_context: :request)
-        findings = rule.analyze(call_sites: [cs])
-        expect(findings.first.severity).to eq(:critical)
+      it 'keeps waiting medium in request and job contexts' do
+        request = make_call_site(receiver_constant: 'Kernel', method_name: :system, execution_context: :request)
+        job = make_call_site(receiver_constant: 'Process', method_name: :wait, execution_context: :job)
+        expect(rule.analyze(call_sites: [request, job]).map(&:severity)).to eq(%i[medium medium])
       end
 
-      it 'detach (info) stays info in unknown context' do
-        cs = make_call_site(receiver_constant: 'Process', method_name: :detach, execution_context: :unknown)
-        findings = rule.analyze(call_sites: [cs])
-        expect(findings.first.severity).to eq(:info)
-      end
-
-      it 'stream (medium) stays medium in unknown context' do
-        cs = make_call_site(receiver_constant: 'IO', method_name: :popen, execution_context: :unknown)
-        findings = rule.analyze(call_sites: [cs])
-        expect(findings.first.severity).to eq(:medium)
-      end
-
-      it 'waiting (medium) raises to high in job context' do
-        cs = make_call_site(receiver_constant: 'Process', method_name: :wait, execution_context: :job)
-        findings = rule.analyze(call_sites: [cs])
-        expect(findings.first.severity).to eq(:high)
-      end
-
-      it 'creation (info) stays low in rake_task context' do
-        cs = make_call_site(receiver_constant: 'Process', method_name: :spawn, execution_context: :rake_task)
-        findings = rule.analyze(call_sites: [cs])
-        expect(findings.first.severity).to eq(:low)
+      it 'keeps detach informational and stream medium' do
+        detach = make_call_site(receiver_constant: 'Process', method_name: :detach, execution_context: :unknown)
+        stream = make_call_site(receiver_constant: 'IO', method_name: :popen, execution_context: :unknown)
+        expect(rule.analyze(call_sites: [detach, stream]).map(&:severity)).to eq(%i[info medium])
       end
     end
 
@@ -367,12 +348,14 @@ RSpec.describe FiberAudit::Static::Rules::BlockingSubprocess do
         end
 
         it 'has correct message' do
-          expect(finding.message).to eq('Waiting for a subprocess may block the thread running the fiber scheduler.')
+          expect(finding.message).to eq(
+            'Subprocess waiting requires scheduler process-wait cooperation in a non-blocking Fiber.'
+          )
         end
 
         it 'has correct remediation' do
           expect(finding.remediation).to eq(
-            'Use scheduler-aware subprocess APIs or move waits outside the fiber-scheduled path.'
+            'Verify scheduler process_wait support and runtime progress, or move waits outside the fiber-scheduled path.'
           )
         end
 
@@ -445,7 +428,7 @@ RSpec.describe FiberAudit::Static::Rules::BlockingSubprocess do
 
         it 'has correct message' do
           expect(finding.message).to eq(
-            'Subprocess pipe I/O may block the fiber scheduler thread while the stream is open.'
+            'Subprocess pipe I/O requires scheduler cooperation while the stream is open.'
           )
         end
       end

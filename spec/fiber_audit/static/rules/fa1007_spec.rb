@@ -235,7 +235,7 @@ RSpec.describe FiberAudit::Static::Rules::NetHTTPInRequest do
 
     it 'has description' do
       expect(described_class.description).to eq(
-        'Synchronous HTTP calls may bypass scheduler-aware I/O cooperation in request contexts'
+        'HTTP calls require scheduler-aware DNS, socket, and TLS cooperation in request contexts'
       )
     end
   end
@@ -244,7 +244,7 @@ RSpec.describe FiberAudit::Static::Rules::NetHTTPInRequest do
     it 'includes correct title' do
       cs = build_call_site(method: :get, context: :request)
       finding = rule.analyze(call_sites: [cs]).first
-      expect(finding.title).to eq('Blocking HTTP call in request path')
+      expect(finding.title).to eq('HTTP scheduler-cooperation requirement')
     end
 
     it 'includes correct category' do
@@ -257,7 +257,7 @@ RSpec.describe FiberAudit::Static::Rules::NetHTTPInRequest do
       cs = build_call_site(method: :get, context: :request)
       finding = rule.analyze(call_sites: [cs]).first
       expect(finding.message).to eq(
-        'Synchronous HTTP activity may bypass scheduler-aware I/O cooperation in request-like contexts.'
+        'HTTP activity requires scheduler-aware DNS and I/O cooperation in a non-blocking Fiber.'
       )
     end
 
@@ -265,7 +265,7 @@ RSpec.describe FiberAudit::Static::Rules::NetHTTPInRequest do
       cs = build_call_site(method: :get, context: :request)
       finding = rule.analyze(call_sites: [cs]).first
       expect(finding.remediation).to eq(
-        'Use a scheduler-aware HTTP client, or move outbound HTTP work outside the request path.'
+        'Verify the selected HTTP/TLS/DNS stack and active scheduler under load; investigate correlated stalls.'
       )
     end
 

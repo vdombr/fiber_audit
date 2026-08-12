@@ -8,7 +8,7 @@ require 'pathname'
 RSpec.describe 'rails blockers golden report' do
   it 'matches the versioned report with portable paths and fingerprints' do
     root = File.expand_path('../../fixtures/apps/rails_blockers', __dir__)
-    golden_path = File.expand_path('../../fixtures/reports/rails_blockers_v0.2.1.json', __dir__)
+    golden_path = File.expand_path('../../fixtures/reports/rails_blockers_v0.3.0.json', __dir__)
     configuration = FiberAudit::Configuration.new
 
     absolute_result = FiberAudit::Audit.new(configuration: configuration, root: root).call
@@ -25,9 +25,10 @@ RSpec.describe 'rails blockers golden report' do
     expect(relative_report).to eq(absolute_report)
     expect(absolute_report).not_to include(root)
     expect(findings.map { |finding| finding.fetch('rule_id') }).to eq(
-      %w[FA1001 FA1002 FA1003 FA1004 FA1005 FA1006 FA1007]
+      %w[FA1004 FA1001 FA1005 FA1007 FA1002 FA1003 FA1006]
     )
-    expect(findings.map { |finding| finding.fetch('fingerprint') })
-      .to eq(relative_result.findings.map(&:fingerprint))
+    expected_fingerprints = relative_result.findings.to_h { |finding| [finding.rule_id, finding.fingerprint] }
+    expect(findings.to_h { |finding| [finding.fetch('rule_id'), finding.fetch('fingerprint')] })
+      .to eq(expected_fingerprints)
   end
 end

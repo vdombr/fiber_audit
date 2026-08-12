@@ -95,4 +95,86 @@ RSpec.describe FiberAudit::Runtime::ActiveOperations do
       )
     end.to raise_error(FiberAudit::RuntimeContractError, /location/)
   end
+
+  context 'with scheduler snapshot' do
+    let(:snapshot) do
+      FiberAudit::Runtime::SchedulerSnapshot.new(
+        scheduler_present: true,
+        fiber_blocking: false,
+        scheduler_io_select_supported: true,
+        scheduler_process_wait_supported: false,
+        scheduler_address_resolve_supported: nil
+      )
+    end
+
+    it 'stores scheduler snapshot in entry when provided' do
+      registry = described_class.new
+      registry.register(
+        operation: 'Mutex#lock',
+        location: location,
+        execution_context: :job,
+        monotonic_ns: 100,
+        thread: Thread.current,
+        fiber: Fiber.current,
+        scheduler_snapshot: snapshot
+      )
+
+      entry = registry.snapshot.first
+      expect(entry.scheduler_snapshot).to eq(snapshot)
+      expect(entry.scheduler_snapshot.scheduler_present).to be(true)
+      expect(entry.scheduler_snapshot.fiber_blocking).to be(false)
+    end
+
+    it 'allows nil scheduler snapshot for backward compatibility' do
+      registry = described_class.new
+      registry.register(
+        operation: 'Mutex#lock',
+        location: location,
+        execution_context: :job,
+        monotonic_ns: 100,
+        thread: Thread.current,
+        fiber: Fiber.current
+      )
+
+      entry = registry.snapshot.first
+      expect(entry.scheduler_snapshot).to be_nil
+    end
+
+    it 'rejects non-SchedulerSnapshot values' do
+      registry = described_class.new
+
+      expect do
+        registry.register(
+          operation: 'Mutex#lock',
+          location: location,
+          execution_context: :job,
+          monotonic_ns: 100,
+          scheduler_snapshot: { scheduler_present: true }
+        )
+      end.to raise_error(FiberAudit::RuntimeContractError, /scheduler_snapshot must be a FiberAudit::Runtime::SchedulerSnapshot/)
+    end
+
+    it 'preserves scheduler snapshot through snapshot retrieval' do
+      registry = described_class.new
+      registry.register(
+        operation: 'Mutex#lock',
+        location: location,
+        execution_context: :job,
+        monotonic_ns: 100,
+        thread: Thread.current,
+        fiber: Fiber.current,
+        scheduler_snapshot: snapshot
+      )
+
+      entries = registry.snapshot(thread_id: Thread.current.object_id)
+      expect(entries.first.scheduler_snapshot).to eq(snapshot)
+      expect(entries.first.scheduler_snapshot.to_measurements).to include(
+        scheduler_present: true,
+        fiber_blocking: false,
+        scheduler_io_select_supported: true,
+        scheduler_process_wait_supported: false,
+        scheduler_address_resolve_supported: nil
+      )
+    end
+  end
 end

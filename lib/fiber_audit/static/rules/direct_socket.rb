@@ -9,22 +9,22 @@ require_relative '../../operation_vocabulary'
 module FiberAudit
   module Static
     module Rules
-      # FA1006 – Detects direct socket creation that may bypass
-      # scheduler-aware networking cooperation. Advisory rule with :low default.
+      # FA1006 – Detects direct socket construction whose DNS, connection, and
+      # later I/O require scheduler cooperation. Advisory rule with :low default.
       class DirectSocket < Base
         id 'FA1006'
         severity :low
         default_confidence :high
-        description 'Direct socket creation may not cooperate with scheduler-aware networking.'
+        description 'Direct socket paths require scheduler-aware DNS and I/O cooperation.'
 
         TITLE    = 'Direct socket creation'
         CATEGORY = :network
 
         EXACT = OperationVocabulary::FA1006_EXACT
 
-        MESSAGE = 'Direct socket use may bypass scheduler-aware networking cooperation and stall the scheduler thread.'
-        REMEDIATION = 'Use scheduler-aware networking APIs or verify the ' \
-                      'socket operations cooperate with the active Fiber scheduler.'
+        MESSAGE = 'This socket path may require scheduler cooperation for DNS, connection, or subsequent I/O.'
+        REMEDIATION = 'Distinguish allocation from DNS/connect/I/O, then verify ' \
+                      'the active scheduler hooks and runtime progress.'
 
         class << self
           def title = TITLE

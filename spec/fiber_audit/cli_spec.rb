@@ -78,10 +78,8 @@ RSpec.describe FiberAudit::CLI do
       expect(FiberAudit::Audit).not_to receive(:new)
 
       expect(run_cli('explain', 'FA1001')).to eq(0)
-      expect(stdout.string).to include('FA1001', 'Kernel.system', 'Default severity: high')
-      expect(stdout.string).to include(
-        'Move long-running subprocess work outside the request path, or verify scheduler behaviour under load.'
-      )
+      expect(stdout.string).to include('FA1001', 'Kernel.system', 'Process.waitpid', 'Default severity: medium')
+      expect(stdout.string).to include('Verify scheduler process_wait support and runtime progress')
     end
 
     it 'returns two for a missing or unknown rule' do
@@ -238,7 +236,7 @@ RSpec.describe FiberAudit::CLI do
       expect(run_cli('static', '--format', 'json', cwd: root)).to eq(1)
       report = JSON.parse(stdout.string)
       expect(report.fetch('findings').map { |finding| finding.fetch('rule_id') }.uniq)
-        .to eq(%w[FA1001 FA1002 FA1003 FA1004 FA1005 FA1006 FA1007])
+        .to eq(%w[FA1004 FA1001 FA1005 FA1007 FA1002 FA1003 FA1006])
       expect(report.fetch('status')).to eq('FAIL')
     end
 

@@ -18,16 +18,17 @@ module FiberAudit
     # - +clear!+ removes context for the current fiber only
     # - +clear!+ inside nested +with+ is not undone by the enclosing ensure
     #   (ensure restores only when its own frame is still the active one)
-    # - Thread isolation is maintained (each thread has its own Fiber storage)
+    # - Thread isolation is maintained even though Ruby copies Fiber storage to a
+    #   newly created Thread's root Fiber
     # - PID mismatch (after fork) is treated as empty context
     # - MAX_DEPTH overflow exposes :unknown rather than stale outer context
     module ExecutionContext
       MAX_DEPTH = 32
       FRAME_KEY = :__fiber_audit_execution_context_frame__
-      PID_KEY   = :__fiber_audit_execution_context_pid__
 
-      # Immutable frame in the context chain.
-      Frame = Data.define(:context, :parent, :depth)
+      # Immutable frame in the context chain. Process and Thread ownership keep
+      # inherited storage from crossing fork or Thread boundaries.
+      Frame = Data.define(:context, :parent, :depth, :pid, :thread_id)
       private_constant :Frame
 
       class << self
@@ -36,17 +37,21 @@ module FiberAudit
           frame ? frame.context : Context::UNKNOWN
         end
 
-        # rubocop:disable Metrics/MethodLength
         def with(context)
           normalized = validate_context(context)
           parent = current_frame
 
           new_depth = parent ? parent.depth + 1 : 1
           effective = new_depth > MAX_DEPTH ? Context::UNKNOWN : normalized
-          frame = Frame.new(context: effective, parent: parent, depth: new_depth)
+          frame = Frame.new(
+            context: effective,
+            parent: parent,
+            depth: new_depth,
+            pid: Process.pid,
+            thread_id: Thread.current.object_id
+          )
 
           Fiber[FRAME_KEY] = frame
-          Fiber[PID_KEY] = Process.pid
           begin
             yield
           ensure
@@ -55,11 +60,9 @@ module FiberAudit
             Fiber[FRAME_KEY] = parent if Fiber[FRAME_KEY].equal?(frame)
           end
         end
-        # rubocop:enable Metrics/MethodLength
 
         def clear!
           Fiber[FRAME_KEY] = nil
-          Fiber[PID_KEY] = nil
         end
 
         # Compatibility alias for clear!.
@@ -75,9 +78,11 @@ module FiberAudit
         private
 
         def current_frame
-          return nil unless Fiber[PID_KEY] == Process.pid
+          frame = Fiber[FRAME_KEY]
+          return nil unless frame&.pid == Process.pid
+          return nil unless frame.thread_id == Thread.current.object_id
 
-          Fiber[FRAME_KEY]
+          frame
         end
 
         def validate_context(value)

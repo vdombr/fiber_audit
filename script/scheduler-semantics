@@ -1,0 +1,170 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Reproduces the Ruby semantics on which FiberAudit's scheduler-cooperation
+# rules rely. It uses only local threads, pipes, and child processes.
+
+require 'json'
+require 'rbconfig'
+
+module SchedulerSemantics
+  # The method names and signatures are fixed by Ruby's scheduler protocol.
+  # rubocop:disable Naming/PredicateMethod
+  class HookProbeScheduler
+    class Invoked < StandardError
+      attr_reader :hook
+
+      def initialize(hook)
+        @hook = hook
+        super("scheduler hook: #{hook}")
+      end
+    end
+
+    def fiber(&)
+      Fiber.new(blocking: false, &).tap(&:resume)
+    end
+
+    def block(*) = raise(Invoked, :block)
+    def unblock(*) = true
+    def kernel_sleep(*) = raise(Invoked, :kernel_sleep)
+    def io_wait(*) = raise(Invoked, :io_wait)
+    def io_select(*) = raise(Invoked, :io_select)
+    def process_wait(*) = raise(Invoked, :process_wait)
+    def address_resolve(*) = raise(Invoked, :address_resolve)
+    def close = nil
+  end
+  # rubocop:enable Naming/PredicateMethod
+
+  module_function
+
+  def observe_hook
+    seen = nil
+    scheduler = HookProbeScheduler.new
+    Fiber.set_scheduler(scheduler)
+    Fiber.schedule do
+      yield
+    rescue HookProbeScheduler::Invoked => e
+      seen = e.hook
+    end
+    seen
+  ensure
+    Fiber.set_scheduler(nil) if Fiber.scheduler
+  end
+
+  def thread_join
+    worker = Thread.new { sleep 10 }
+    observe_hook { worker.join }
+  ensure
+    worker&.kill
+    worker&.join
+  end
+
+  def mutex_contention
+    mutex = Mutex.new
+    locked = Queue.new
+    release = Queue.new
+    holder = Thread.new do
+      mutex.synchronize do
+        locked << true
+        release.pop
+      end
+    end
+    locked.pop
+    observe_hook { mutex.lock }
+  ensure
+    release << true if release && release.empty?
+    holder&.join
+  end
+
+  def io_select
+    reader, writer = IO.pipe
+    # Calling IO.select is the behavior under test.
+    # rubocop:disable Lint/IncompatibleIoSelectWithFiberScheduler
+    observe_hook { IO.select([reader], nil, nil, 1) }
+    # rubocop:enable Lint/IncompatibleIoSelectWithFiberScheduler
+  ensure
+    reader&.close
+    writer&.close
+  end
+
+  def process_wait
+    pid = Process.spawn(RbConfig.ruby, '-e', 'sleep 10')
+    observe_hook { Process.wait(pid) }
+  ensure
+    if pid
+      begin
+        Process.kill('KILL', pid)
+        Process.wait(pid)
+      rescue Errno::ESRCH, Errno::ECHILD
+        nil
+      end
+    end
+  end
+
+  def storage
+    Thread.current[:fiber_audit_probe] = :parent_fiber
+    Thread.current.thread_variable_set(:fiber_audit_probe, :parent_thread)
+    Fiber[:fiber_audit_probe] = :inherited_storage
+
+    child = Fiber.new do
+      {
+        thread_index: Thread.current[:fiber_audit_probe],
+        thread_variable: Thread.current.thread_variable_get(:fiber_audit_probe),
+        fiber_storage: Fiber[:fiber_audit_probe]
+      }
+    end
+
+    child.resume
+  ensure
+    Thread.current[:fiber_audit_probe] = nil
+    Thread.current.thread_variable_set(:fiber_audit_probe, nil)
+    Fiber[:fiber_audit_probe] = nil
+  end
+
+  def rejected_scheduler_replacement
+    scheduler = HookProbeScheduler.new
+    Fiber.set_scheduler(scheduler)
+    raised = false
+    begin
+      Fiber.set_scheduler(Object.new)
+    rescue ArgumentError
+      raised = true
+    end
+
+    { raised: raised, retained: Fiber.scheduler.equal?(scheduler) }
+  ensure
+    Fiber.set_scheduler(nil) if Fiber.scheduler
+  end
+end
+
+results = {
+  ruby: RUBY_DESCRIPTION,
+  thread_join: SchedulerSemantics.thread_join,
+  mutex_contention: SchedulerSemantics.mutex_contention,
+  io_select: SchedulerSemantics.io_select,
+  process_wait: SchedulerSemantics.process_wait,
+  storage: SchedulerSemantics.storage,
+  rejected_scheduler_replacement: SchedulerSemantics.rejected_scheduler_replacement
+}
+
+expected = {
+  thread_join: :block,
+  mutex_contention: :block,
+  io_select: :io_select,
+  process_wait: :process_wait,
+  storage: {
+    thread_index: nil,
+    thread_variable: :parent_thread,
+    fiber_storage: :inherited_storage
+  },
+  rejected_scheduler_replacement: { raised: true, retained: true }
+}
+
+failures = expected.filter_map do |name, value|
+  next if results.fetch(name) == value
+
+  "#{name}: expected #{value.inspect}, got #{results.fetch(name).inspect}"
+end
+
+puts JSON.pretty_generate(results)
+abort("Semantic probe failures:\n- #{failures.join("\n- ")}") unless failures.empty?

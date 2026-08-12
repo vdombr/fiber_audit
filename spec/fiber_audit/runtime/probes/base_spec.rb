@@ -278,4 +278,71 @@ RSpec.describe FiberAudit::Runtime::Probes::Base do
       expect(event.dig('payload', 'execution_context')).to eq('unknown')
     end
   end
+
+  context 'with scheduler snapshot' do
+    it 'captures scheduler snapshot at operation start and includes in measurements' do
+      base, recorder, _, io = build_base
+
+      base.observe(operation: 'Mutex#lock') { :result }
+      recorder.close
+
+      event = events(io).first
+      measurements = event.dig('payload', 'measurements')
+
+      expect(measurements).to include('scheduler_present')
+      expect(measurements).to include('fiber_blocking')
+      expect(measurements).to include('scheduler_io_select_supported')
+      expect(measurements).to include('scheduler_process_wait_supported')
+      expect(measurements).to include('scheduler_address_resolve_supported')
+
+      # The RSpec example runs in the root (blocking) Fiber without a scheduler.
+      expect(measurements['scheduler_present']).to be(false)
+      expect(measurements['fiber_blocking']).to be(true)
+    end
+
+    it 'captures immutable scheduler snapshot in active operations' do
+      base, recorder, operations, = build_base
+      snapshot = nil
+
+      base.observe(operation: 'ConditionVariable#wait') do
+        snapshot = operations.snapshot
+        :done
+      end
+
+      expect(snapshot.first.scheduler_snapshot).to be_a(FiberAudit::Runtime::SchedulerSnapshot)
+      expect(snapshot.first.scheduler_snapshot.scheduler_present).to be(false)
+      recorder.close
+    end
+
+    it 'includes scheduler measurements in both start and completed events' do
+      base, recorder, _, io = build_base(probe_times: [100, 150])
+
+      base.observe(operation: 'Mutex#lock', emit_start: true) { :result }
+      recorder.close
+
+      events_list = events(io)
+      expect(events_list.size).to eq(2)
+
+      start_event = events_list.find { |e| e.dig('payload', 'kind') == 'operation_started' }
+      completed_event = events_list.find { |e| e.dig('payload', 'kind') == 'operation_completed' }
+
+      expect(start_event.dig('payload', 'measurements')).to include('scheduler_present')
+      expect(completed_event.dig('payload', 'measurements')).to include('scheduler_present')
+    end
+
+    it 'preserves scheduler snapshot immutability across operation lifecycle' do
+      base, recorder, operations, = build_base
+      initial_snapshot = nil
+
+      base.observe(operation: 'Mutex#lock') do
+        initial_snapshot = operations.snapshot.first.scheduler_snapshot
+        :result
+      end
+
+      # Snapshot should be frozen and immutable
+      expect(initial_snapshot).to be_frozen
+      expect(initial_snapshot.scheduler_present).to be(false)
+      recorder.close
+    end
+  end
 end

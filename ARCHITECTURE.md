@@ -20,13 +20,10 @@ produces hypotheses, while observational runtime sessions provide bounded eviden
 without establishing complete coverage. FiberAudit never claims unconditional
 `PASS`.
 
-> **Repository status:** v0.2.1 includes the v0.1.0 static pipeline end to end:
-> project discovery, configuration, semantic and syntax analysis, execution
-> contexts, FA1001–FA1007, suppressions, status derivation, text/JSON reports,
-> and the CLI. The v0.2 runtime contracts, bounded JSONL recorder, explicit
-> child-process boot, lifecycle, supervising command, bounded scheduler
-> watchdog, targeted FA1001–FA1007 operation probes, and Rails runtime execution
-> contexts are implemented; static/runtime correlation remains future work.
+> **Repository status:** v0.3.0 includes the static pipeline end to end,
+> observational runtime probes, propagated Rails execution context,
+> scheduler-capability snapshots, and bounded operation/stall overlap events.
+> Combined static/runtime reporting remains future work.
 
 ## 2. Scope
 
@@ -60,8 +57,8 @@ Current code and specs define implementation truth. This document records the
 supported architecture and dependency boundaries; README and CHANGELOG record
 the user-facing release contract.
 
-The corrected platform target is Ruby `>= 3.3` with CI configured for Ruby 3.3
-and 3.4. Ruby 3.2 is excluded because it is end-of-life.
+The platform target is Ruby `>= 3.3` with CI configured for Ruby 3.3, 3.4,
+and 4.0. Ruby 3.2 is excluded because it is end-of-life.
 
 ## 4. Architectural Principles
 
@@ -363,17 +360,17 @@ explicit and can lower confidence.
 Rules consume FiberAudit `CallSite` values and emit `Finding` values. They do
 not parse files and do not access Rubydex directly.
 
-Shipped v0.1.0 rules:
+Shipped rules:
 
 | ID | Concern | Default severity |
 |---|---|---:|
-| FA1001 | Blocking subprocess operations | high |
-| FA1002 | `Thread#join` / `Thread#value` | high |
-| FA1003 | Blocking synchronization | medium |
-| FA1004 | Thread-local request state | medium/high by operation |
-| FA1005 | Explicit `IO.select` | medium |
-| FA1006 | Direct socket creation | medium |
-| FA1007 | `Net::HTTP` in request-like contexts | high |
+| FA1001 | Subprocess lifecycle and process-wait cooperation | info/medium |
+| FA1002 | Thread-wait scheduler coordination | low |
+| FA1003 | Synchronization scheduler coordination | low/info |
+| FA1004 | True Thread variables shared across sibling Fibers | high |
+| FA1005 | `IO.select` scheduler capability requirement | medium |
+| FA1006 | Socket/DNS/I/O scheduler cooperation | low |
+| FA1007 | HTTP scheduler cooperation in request-like contexts | medium |
 
 A rule registry owns registration, enumeration, configuration enablement, and
 metadata used by `list-rules` and `explain`.
@@ -595,7 +592,8 @@ spec/fixtures/apps/rails_contexts
 spec/fixtures/reports/rails_blockers_v0.1.json
 ```
 
-CI is configured to run linting, specs, and gem packaging on Ruby 3.3 and 3.4.
+CI is configured to run linting, specs, and gem packaging on Ruby 3.3, 3.4,
+and 4.0.
 The workflow configuration does not itself prove that remote CI has passed.
 
 ## 13. Runtime Architecture Beyond v0.1.0
@@ -666,11 +664,11 @@ stall, and only then closes the recorder. Fork rebinding discards inherited prob
 and watchdog references before touching their locks and creates process-local
 replacements.
 
-Stage 6 adds Rails execution context detection. A bounded, PID-aware fiber-local
-context stack tracks the current execution context during probe observations.
-The fiber-local stack uses `Fiber.current` instance variables to avoid thread-local
-key visibility, validates against `Context::ALL`, enforces `MAX_DEPTH = 32`, and
-resets on fork. A process-local `RailsIntegration` class hooks into Rails boundaries
+Rails execution context detection uses a bounded immutable frame chain in Ruby
+Fiber storage. Child Fibers inherit the current logical context snapshot, while
+child overrides and `clear!` remain local to that Fiber. Frames carry PID and
+Thread ownership, validate against `Context::ALL`, enforce `MAX_DEPTH = 32`, and
+reset on fork. A process-local `RailsIntegration` class hooks into Rails boundaries
 via `Module#prepend`: Rack middleware (`:middleware`), `ActionController::Metal#process_action`
 (`:request`), `ActiveJob::Base#perform_now` (`:job`), and `ActionCable::Channel::Base#dispatch_action`
 (`:websocket`). Wrappers consult the active integration before setting context and become
@@ -680,7 +678,11 @@ even after runtime boot. Probe observations snapshot the context once at start a
 propagate it through active operations and events. Lifecycle wires context store and
 Rails integration ownership, shutdown deactivates Rails integration before probes,
 and fork rebinding resets context and rebuilds integration. JSONL schema 1.0 and
-privacy requirements are preserved; no new schema fields are added.
+privacy requirements are preserved; no new schema fields are added. Runtime
+operation events also record scheduler presence, blocking-Fiber state, and
+optional hook support. Watchdog stalls emit bounded
+`scheduler_stall_operation_overlap` events for operations active on the same
+Thread. These events establish temporal overlap, not causality.
 
 Loading the gem normally performs no instrumentation, fibers, threads, or file
 I/O. The observer is activated only by explicit runtime boot. A native operation

@@ -12,20 +12,6 @@ module FiberAudit
           def thread_variable_set(...)
             Registry.observe(operation: 'Thread.thread_variable_set') { super }
           end
-
-          def [](...)
-            return super unless equal?(Thread.current)
-
-            Registry.observe(operation: 'Thread.current.[]') { super }
-          end
-
-          def []=(...)
-            if equal?(Thread.current)
-              Registry.observe(operation: 'Thread.current.[]=') { super }
-            else
-              super
-            end
-          end
         end
 
         module_function

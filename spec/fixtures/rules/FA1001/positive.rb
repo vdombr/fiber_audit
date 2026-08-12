@@ -41,6 +41,7 @@ class SubprocessExamples
     Process.waitpid(1234)
     Process.waitpid2(1234)
     Process.waitall
+    Process::Status.wait(1234)
   end
 
   def process_detach

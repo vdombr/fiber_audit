@@ -262,7 +262,7 @@ RSpec.describe 'FiberAudit runtime boot' do
         scenario,
         <<~RUBY
           require 'rbconfig'
-          Thread.current[:stage5_secret_key] = '#{secret}'
+          Thread.current.thread_variable_set(:stage5_secret_key, '#{secret}')
           Mutex.new.synchronize { :ok }
           IO.select(nil, nil, nil, 0.001)
           system(RbConfig.ruby, '-e', 'exit 0', '#{secret}')
@@ -295,7 +295,7 @@ RSpec.describe 'FiberAudit runtime boot' do
 
       expect(status).to be_success, stderr
       expect(operations).to include(
-        'Thread.current.[]=', 'Mutex#synchronize', 'IO.select',
+        'Thread.thread_variable_set', 'Mutex#synchronize', 'IO.select',
         'Kernel.system', 'Open3.capture2', 'Monitor#synchronize', 'Socket.new'
       )
       expect(files.map { |path| File.binread(path) }.join).not_to include(secret, 'stage5_secret_key')

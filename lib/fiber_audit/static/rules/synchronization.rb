@@ -24,12 +24,9 @@ module FiberAudit
         RULE_TITLE = 'Thread synchronization'
         RULE_CATEGORY = :synchronization
         TARGETS = OperationVocabulary::FA1003_TARGETS
-        TRY_LOCK_MSG = 'Mutex#try_lock is non-blocking but indicates thread-oriented ' \
-                       'synchronization that may not cooperate with the fiber scheduler.'
-        NORMAL_MSG = 'Blocking synchronization may stall the fiber scheduler thread; ' \
-                     'prefer scheduler-aware primitives.'
-        REMEDIATION = 'Use scheduler-aware synchronization primitives, or verify ' \
-                      'contention behaviour under the active fiber scheduler.'
+        TRY_LOCK_MSG = 'Mutex#try_lock is non-blocking and identifies a thread-oriented coordination point.'
+        NORMAL_MSG = 'Synchronization contention requires scheduler block/unblock cooperation in a non-blocking Fiber.'
+        REMEDIATION = 'Verify scheduler coordination and contention behavior under load; investigate correlated stalls.'
 
         def analyze(call_sites:)
           explicit_monitor_mixins = explicit_monitor_mixin_classes(call_sites)

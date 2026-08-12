@@ -171,7 +171,7 @@ RSpec.describe FiberAudit::Static::Rules::ThreadCurrentState do
           'and may leak request-local data between concurrent requests.'
         )
         expect(finding.remediation).to eq(
-          'Prefer fiber-local storage (Fiber.current[:key]) or framework-provided ' \
+          'Prefer fiber-local storage (Fiber[:key]) or framework-provided ' \
           'request-local state over thread_variable_get/set.'
         )
         expect(finding.symbol).to eq('User#process')

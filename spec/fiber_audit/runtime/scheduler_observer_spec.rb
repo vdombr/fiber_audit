@@ -15,7 +15,18 @@ RSpec.describe FiberAudit::Runtime::SchedulerObserver do
     end
   end
 
+  let(:valid_scheduler_class) do
+    Class.new do
+      define_method(:block) { |*| nil }
+      define_method(:unblock) { |*| nil }
+      define_method(:kernel_sleep) { |*| nil }
+      define_method(:io_wait) { |*| nil }
+      define_method(:close) { :closed }
+    end
+  end
+
   after do
+    Fiber.set_scheduler(nil) if Fiber.scheduler
     described_class.deactivate(@observer) if @observer
   end
 
@@ -67,6 +78,67 @@ RSpec.describe FiberAudit::Runtime::SchedulerObserver do
     scheduler.close
 
     expect(watchdog).not_to have_received(:scheduler_closing)
+  end
+
+  it 'keeps the accepted scheduler active when a replacement is rejected' do
+    scheduler = valid_scheduler_class.new
+    @observer = described_class.activate(watchdog: watchdog)
+    Fiber.set_scheduler(scheduler)
+
+    expect { Fiber.set_scheduler(Object.new) }.to raise_error(ArgumentError)
+
+    expect(Fiber.scheduler).to equal(scheduler)
+    expect(watchdog).not_to have_received(:scheduler_closing)
+    expect(watchdog).to have_received(:scheduler_installed).once.with(thread: Thread.current)
+  end
+
+  it 'reconciles a successful scheduler replacement exactly once' do
+    previous = valid_scheduler_class.new
+    replacement = valid_scheduler_class.new
+    @observer = described_class.activate(watchdog: watchdog)
+    Fiber.set_scheduler(previous)
+
+    expect(Fiber.set_scheduler(replacement)).to equal(replacement)
+
+    expect(Fiber.scheduler).to equal(replacement)
+    expect(watchdog).to have_received(:scheduler_closing).once.with(thread: Thread.current)
+    expect(watchdog).to have_received(:scheduler_installed).twice.with(thread: Thread.current)
+  end
+
+  it 'reinstalls observation when Ruby closes and accepts the same scheduler' do
+    scheduler = valid_scheduler_class.new
+    @observer = described_class.activate(watchdog: watchdog)
+    Fiber.set_scheduler(scheduler)
+
+    Fiber.set_scheduler(scheduler)
+
+    expect(Fiber.scheduler).to equal(scheduler)
+    expect(watchdog).to have_received(:scheduler_closing).once.with(thread: Thread.current)
+    expect(watchdog).to have_received(:scheduler_installed).twice.with(thread: Thread.current)
+  end
+
+  it 'reconciles removal after Ruby accepts nil' do
+    scheduler = valid_scheduler_class.new
+    @observer = described_class.activate(watchdog: watchdog)
+    Fiber.set_scheduler(scheduler)
+
+    expect(Fiber.set_scheduler(nil)).to be_nil
+
+    expect(Fiber.scheduler).to be_nil
+    expect(watchdog).to have_received(:scheduler_closing).once.with(thread: Thread.current)
+  end
+
+  it 'announces closure before calling the scheduler so its heartbeat can stop' do
+    scheduler_class = Class.new(valid_scheduler_class) do
+      define_method(:close) { raise 'close failed' }
+    end
+    scheduler = scheduler_class.new
+    @observer = described_class.activate(watchdog: watchdog)
+    Fiber.set_scheduler(scheduler)
+
+    expect { Fiber.set_scheduler(nil) }.to raise_error(RuntimeError, 'close failed')
+
+    expect(watchdog).to have_received(:scheduler_closing).once.with(thread: Thread.current)
   end
 
   it 'requires a watchdog owned by FiberAudit' do

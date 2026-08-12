@@ -21,7 +21,8 @@ module FiberAudit
       # - stream: subprocess pipe/stream lifecycle via IO.popen (medium)
       #
       # Severity: info for creation/replacement/detach, medium for waits/stream.
-      # Context ceiling still applies (non-advisory rule).
+      # These are scheduler-cooperation requirements, so execution context does
+      # not by itself escalate them to critical.
       class BlockingSubprocess < Base
         id 'FA1001'
         severity :medium
@@ -74,8 +75,9 @@ module FiberAudit
           waiting: {
             severity: :medium,
             title: 'Subprocess wait',
-            message: 'Waiting for a subprocess may block the thread running the fiber scheduler.',
-            remediation: 'Use scheduler-aware subprocess APIs or move waits outside the fiber-scheduled path.'
+            message: 'Subprocess waiting requires scheduler process-wait cooperation in a non-blocking Fiber.',
+            remediation: 'Verify scheduler process_wait support and runtime progress, ' \
+                         'or move waits outside the fiber-scheduled path.'
           },
           detach: {
             severity: :info,
@@ -86,8 +88,9 @@ module FiberAudit
           stream: {
             severity: :medium,
             title: 'Subprocess pipe stream',
-            message: 'Subprocess pipe I/O may block the fiber scheduler thread while the stream is open.',
-            remediation: 'Use scheduler-aware I/O on the pipe, or move pipe operations outside the fiber-scheduled path.'
+            message: 'Subprocess pipe I/O requires scheduler cooperation while the stream is open.',
+            remediation: 'Verify scheduler-aware I/O and runtime progress on the pipe, ' \
+                         'or move pipe operations outside the fiber-scheduled path.'
           }
         }.freeze
 
@@ -133,7 +136,7 @@ module FiberAudit
           category = OPERATION_CATEGORY.fetch(operation, :waiting)
           metadata = CATEGORY_METADATA.fetch(category)
           base_severity = metadata[:severity]
-          sev = severity_for(base_severity, context)
+          sev = advisory_severity(base_severity)
 
           Finding.new(
             rule_id: self.class.id,

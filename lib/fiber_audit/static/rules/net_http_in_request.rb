@@ -9,7 +9,7 @@ require_relative '../../operation_vocabulary'
 module FiberAudit
   module Static
     module Rules
-      # FA1007: Detects blocking HTTP calls in request-like contexts.
+      # FA1007: Detects HTTP scheduler-cooperation requirements in request-like contexts.
       # Targets Net::HTTP.{get,get_response,start,request}, URI.open, OpenURI.open_uri.
       # Excludes Net::HTTP.get_print. Emits only for request/middleware/websocket/callback.
       #
@@ -18,12 +18,13 @@ module FiberAudit
         id 'FA1007'
         severity :medium
         default_confidence :high
-        description 'Synchronous HTTP calls may bypass scheduler-aware I/O cooperation in request contexts'
+        description 'HTTP calls require scheduler-aware DNS, socket, and TLS cooperation in request contexts'
 
-        TITLE = 'Blocking HTTP call in request path'
+        TITLE = 'HTTP scheduler-cooperation requirement'
         CATEGORY = :network
-        MESSAGE = 'Synchronous HTTP activity may bypass scheduler-aware I/O cooperation in request-like contexts.'
-        REMEDIATION = 'Use a scheduler-aware HTTP client, or move outbound HTTP work outside the request path.'
+        MESSAGE = 'HTTP activity requires scheduler-aware DNS and I/O cooperation in a non-blocking Fiber.'
+        REMEDIATION = 'Verify the selected HTTP/TLS/DNS stack and active scheduler ' \
+                      'under load; investigate correlated stalls.'
 
         NET_HTTP_METHODS = OperationVocabulary::FA1007_NET_HTTP_METHODS
         URI_METHODS = OperationVocabulary::FA1007_URI_METHODS
@@ -103,7 +104,7 @@ module FiberAudit
             evidence: [
               FiberAudit::Evidence.new(
                 source: 'static_analysis',
-                message: "Blocking HTTP call detected: #{match[:operation]}",
+                message: "HTTP scheduler-cooperation point: #{match[:operation]}",
                 details: { receiver: site.receiver_constant, method: site.method_name, context: context }
               )
             ],

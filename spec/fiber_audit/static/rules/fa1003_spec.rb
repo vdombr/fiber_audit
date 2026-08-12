@@ -117,7 +117,7 @@ RSpec.describe FiberAudit::Static::Rules::Synchronization do
 
       expect(findings.size).to eq(1)
       expect(findings.first.operation).to eq('Mutex#lock')
-      expect(findings.first.message).to include('scheduler-aware')
+      expect(findings.first.message).to include('scheduler block/unblock cooperation')
     end
 
     it 'detects Mutex#synchronize' do
@@ -405,10 +405,10 @@ RSpec.describe FiberAudit::Static::Rules::Synchronization do
       expect(finding.symbol).to eq('Worker#perform')
       expect(finding.operation).to eq('Mutex#lock')
       expect(finding.execution_context).to eq(:request)
-      expect(finding.message).to include('scheduler-aware')
+      expect(finding.message).to include('scheduler block/unblock cooperation')
       expect(finding.evidence).to be_an(Array)
       expect(finding.evidence.size).to eq(1)
-      expect(finding.remediation).to include('scheduler-aware')
+      expect(finding.remediation).to include('Verify scheduler coordination')
       expect(finding.fingerprint).to be_a(String)
       expect(finding.fingerprint).not_to be_empty
     end
@@ -440,7 +440,7 @@ RSpec.describe FiberAudit::Static::Rules::Synchronization do
       evidence = finding.evidence.first
 
       expect(evidence.source).to eq('Mutex#lock')
-      expect(evidence.message).to include('scheduler-aware')
+      expect(evidence.message).to include('scheduler block/unblock cooperation')
       expect(evidence.details).to include(
         receiver: 'mutex',
         method: 'lock',

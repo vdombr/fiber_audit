@@ -304,7 +304,7 @@ RSpec.describe FiberAudit::Runtime::ExecutionContext do
       described_class.with(:request) do
         frame = described_class.send(:current_frame)
       end
-      expect { frame.context = :job }.to raise_error(FrozenError) if frame
+      expect(frame).not_to respond_to(:context=) if frame
     end
   end
 end

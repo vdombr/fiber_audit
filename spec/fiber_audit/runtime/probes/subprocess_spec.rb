@@ -37,8 +37,18 @@ RSpec.describe FiberAudit::Runtime::Probes::Subprocess do
     Open3.capture3(RbConfig.ruby, '-e', 'puts :capture3')
     Open3.pipeline([RbConfig.ruby, '-e', 'exit 0'])
 
+    # Test additional Process methods
+    pid1 = Process.spawn(RbConfig.ruby, '-e', 'exit 0')
+    Process.waitpid(pid1)
+    pid2 = Process.spawn(RbConfig.ruby, '-e', 'exit 0')
+    Process.wait2(pid2)
+    pid3 = Process.spawn(RbConfig.ruby, '-e', 'exit 0')
+    Process.waitpid2(pid3)
+
     expect(operations(@runtime)).to include(
       'Kernel.spawn', 'Process.detach', 'Process.waitall',
+      'Process.wait', 'Process.waitpid', 'Process.wait2', 'Process.waitpid2',
+      'Process.spawn',
       'Open3.capture2e', 'Open3.capture3', 'Open3.pipeline'
     )
   end

@@ -15,6 +15,7 @@ module FiberAudit
     class Watchdog
       SOURCE = :scheduler_watchdog
       STOP_TIMEOUT_SECONDS = 1
+      MAX_OVERLAP_EVENTS = 10
 
       Stall = Data.define(:sequence, :progress_sequence, :began_monotonic_ns)
       Channel = Struct.new(:thread, :heartbeat, :active, :unsupported, :stall, keyword_init: true)
@@ -296,6 +297,45 @@ module FiberAudit
             measurements: { stall_sequence: @stall_sequence, frame_index: index }
           )
         end
+        emit_stall_operation_overlap_events(operations, now_ns, snapshot)
+      end
+
+      def emit_stall_operation_overlap_events(operations, now_ns, _snapshot)
+        return if operations.empty?
+
+        truncated = operations.size > MAX_OVERLAP_EVENTS
+        bounded_operations = operations.first(MAX_OVERLAP_EVENTS)
+
+        bounded_operations.each do |entry|
+          overlap_measurements = build_overlap_measurements(entry, truncated, operations.size)
+          emit_event(
+            kind: :scheduler_stall_operation_overlap,
+            monotonic_ns: now_ns,
+            operation: entry.operation,
+            location: entry.location,
+            execution_context: entry.execution_context,
+            thread_id: entry.thread_id,
+            fiber_id: entry.fiber_id,
+            measurements: overlap_measurements
+          )
+        end
+      rescue StandardError => e
+        account_internal_error unless recorder.disabled?
+        raise e unless fail_open?
+      end
+
+      def build_overlap_measurements(entry, truncated, total_count)
+        measurements = {
+          stall_sequence: @stall_sequence,
+          operation_sequence: entry.sequence,
+          operation_started_monotonic_ns: entry.started_monotonic_ns,
+          overlap_truncated: truncated,
+          overlap_total_count: total_count
+        }
+
+        measurements.merge!(entry.scheduler_snapshot.to_measurements) if entry.scheduler_snapshot
+
+        measurements
       end
 
       def complete_stall(channel, now_ns:, resumed:)
@@ -358,7 +398,8 @@ module FiberAudit
         )
       end
 
-      def emit_event(kind:, monotonic_ns:, duration_ns: nil, location: nil, thread_id: nil, fiber_id: nil, measurements: {})
+      def emit_event(kind:, monotonic_ns:, duration_ns: nil, location: nil, thread_id: nil, fiber_id: nil, operation: nil,
+                     execution_context: :unknown, measurements: {})
         recorder.record_control do
           Event.new(
             kind: kind,
@@ -366,8 +407,9 @@ module FiberAudit
             occurred_at: @clock.wall_time,
             monotonic_ns: monotonic_ns,
             duration_ns: duration_ns,
+            operation: operation,
             location: location,
-            execution_context: :unknown,
+            execution_context: execution_context,
             thread_id: thread_id,
             fiber_id: fiber_id,
             measurements: measurements

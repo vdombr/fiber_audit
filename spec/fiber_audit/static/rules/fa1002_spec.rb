@@ -330,13 +330,12 @@ RSpec.describe FiberAudit::Static::Rules::ThreadJoin do
         expect(finding.operation).to eq('Thread.join')
         expect(finding.execution_context).to eq(:request)
         expect(finding.message).to eq(
-          'Thread#join/value bypasses fiber scheduler cooperation and may stall the scheduler thread.'
+          'Thread#join/value requires scheduler block/unblock cooperation in a non-blocking Fiber.'
         )
         expect(finding.evidence).to be_an(Array)
         expect(finding.evidence).not_to be_empty
         expect(finding.remediation).to eq(
-          'Replace thread waits with scheduler-aware coordination, ' \
-          'or move the work outside the fiber-scheduled path.'
+          'Verify scheduler coordination and runtime progress, or move the wait outside the fiber-scheduled path.'
         )
       end
 
@@ -491,7 +490,7 @@ RSpec.describe FiberAudit::Static::Rules::ThreadJoin do
     end
 
     it 'has correct description' do
-      expect(described_class.description).to eq('Thread waits do not cooperate with the fiber scheduler')
+      expect(described_class.description).to eq('Thread waits require scheduler block/unblock cooperation')
     end
 
     it 'has correct title constant' do

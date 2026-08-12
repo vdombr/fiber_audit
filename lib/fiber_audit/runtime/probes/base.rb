@@ -7,6 +7,7 @@ require_relative '../execution_context'
 require_relative '../rails_integration'
 require_relative '../recorder'
 require_relative '../redactor'
+require_relative '../scheduler_snapshot'
 
 module FiberAudit
   module Runtime
@@ -27,7 +28,8 @@ module FiberAudit
           :thread_id,
           :fiber_id,
           :measurements,
-          :execution_context
+          :execution_context,
+          :scheduler_snapshot
         )
 
         attr_reader :recorder, :clock, :redactor, :active_operations, :owner_pid, :execution_context_store
@@ -125,13 +127,15 @@ module FiberAudit
             thread = Thread.current
             fiber = Fiber.current
             captured_context = capture_execution_context
+            captured_scheduler_snapshot = capture_scheduler_snapshot
             handle = active_operations.register(
               operation: canonical_operation,
               monotonic_ns: started_ns,
               location: location,
               execution_context: captured_context,
               thread: thread,
-              fiber: fiber
+              fiber: fiber,
+              scheduler_snapshot: captured_scheduler_snapshot
             )
             Observation.new(
               operation: canonical_operation,
@@ -141,7 +145,8 @@ module FiberAudit
               thread_id: thread.object_id,
               fiber_id: fiber.object_id,
               measurements: normalized_measurements,
-              execution_context: captured_context
+              execution_context: captured_context,
+              scheduler_snapshot: captured_scheduler_snapshot
             )
           end
           # rubocop:enable Metrics/BlockLength
@@ -153,6 +158,10 @@ module FiberAudit
           execution_context_store.current
         rescue StandardError
           Context::UNKNOWN
+        end
+
+        def capture_scheduler_snapshot
+          SchedulerSnapshotCapture.capture
         end
 
         def emit_start_observation(observation)
@@ -207,11 +216,14 @@ module FiberAudit
             values.merge!(generated)
           end
           values[:operation_sequence] = observation.handle&.sequence
+          # Include scheduler snapshot measurements (immutable, captured at operation start)
+          values.merge!(observation.scheduler_snapshot.to_measurements) if observation.scheduler_snapshot
           values
         end
 
         def emit_observation(kind, observation, monotonic_ns:, duration_ns: nil, measurements: nil)
           values = measurements || observation.measurements.merge(operation_sequence: observation.handle&.sequence)
+          values = merge_scheduler_measurements_for_emit(values.dup, observation.scheduler_snapshot)
           recorder.record do
             Event.new(
               kind: kind,
@@ -227,6 +239,15 @@ module FiberAudit
               measurements: values
             )
           end
+        end
+
+        def merge_scheduler_measurements_for_emit(values, scheduler_snapshot)
+          return values unless scheduler_snapshot
+
+          scheduler_snapshot.to_measurements.each do |key, value|
+            values[key.to_sym] = value unless values.key?(key.to_sym)
+          end
+          values
         end
 
         def normalize_measurements(value)

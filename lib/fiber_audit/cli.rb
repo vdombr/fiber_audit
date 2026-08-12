@@ -274,12 +274,25 @@ module FiberAudit
       stdout.puts "Description: #{rule_class.description}"
       stdout.puts 'Targets:'
       rule_targets(rule_class).each { |target| stdout.puts "  - #{target}" }
-      stdout.puts "Remediation: #{rule_class.const_get(:REMEDIATION)}"
+      print_rule_remediations(rule_class, stdout)
       0
     end
 
+    def print_rule_remediations(rule_class, stdout)
+      values = if rule_class.const_defined?(:REMEDIATION, false)
+                 [rule_class.const_get(:REMEDIATION)]
+               elsif rule_class.const_defined?(:CATEGORY_METADATA, false)
+                 rule_class.const_get(:CATEGORY_METADATA).values.map { |metadata| metadata.fetch(:remediation) }.uniq
+               else
+                 []
+               end
+      values.each_with_index do |remediation, index|
+        stdout.puts "#{index.zero? ? 'Remediation:' : '            '} #{remediation}"
+      end
+    end
+
     def rule_title(rule_class)
-      return 'Blocking subprocess call' if rule_class.id == 'FA1001'
+      return 'Subprocess lifecycle operations' if rule_class.id == 'FA1001'
 
       %i[TITLE RULE_TITLE].each do |name|
         return rule_class.const_get(name) if rule_class.const_defined?(name, false)
@@ -296,8 +309,7 @@ module FiberAudit
       when 'FA1003'
         expand_target_map(rule_class::TARGETS, '#')
       when 'FA1004'
-        rule_class::THREAD_VARIABLE_METHODS.map { |method| "Thread##{method}" } +
-          rule_class::INDEX_METHODS.map { |method| "Thread.current.#{method}" }
+        rule_class::THREAD_VARIABLE_METHODS.map { |method| "Thread##{method}" }
       when 'FA1005'
         expand_target_map(rule_class::TARGETS.transform_values { |method| [method] }, '.')
       when 'FA1006'

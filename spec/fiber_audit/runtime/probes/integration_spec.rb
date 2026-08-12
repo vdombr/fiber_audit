@@ -108,13 +108,18 @@ RSpec.describe 'targeted runtime probe integration' do
 
       _stdout, stderr, status = run_file(activation_environment(root, output, watchdog: watchdog), scenario)
       records = sessions(output).first.last
-      operation = records.find { |record| record.dig('payload', 'operation') == 'IO.select' }
+      operation = records.find do |record|
+        record.dig('payload', 'operation') == 'IO.select' &&
+          record.dig('payload', 'kind') == 'operation_completed'
+      end
+      overlap = records.find { |record| record.dig('payload', 'kind') == 'scheduler_stall_operation_overlap' }
       stall = records.find { |record| record.dig('payload', 'kind') == 'scheduler_stall_started' }
 
       expect(status).to be_success, stderr
-      expect(operation.dig('payload', 'kind')).to eq('operation_completed')
+      expect(operation).not_to be_nil
       expect(stall.dig('payload', 'measurements', 'active_operation_count')).to eq(1)
-      expect(stall.dig('payload', 'measurements', 'active_operation_first_sequence'))
+      expect(overlap.dig('payload', 'operation')).to eq('IO.select')
+      expect(overlap.dig('payload', 'measurements', 'operation_sequence'))
         .to eq(operation.dig('payload', 'measurements', 'operation_sequence'))
       expect(records.count { |record| record.dig('payload', 'kind') == 'scheduler_stall_completed' }).to eq(1)
     end
@@ -199,10 +204,10 @@ RSpec.describe 'targeted runtime probe integration' do
         scenario,
         <<~RUBY
           pid = fork do
-            Thread.current[:stage5_fork_probe] = :child
+            Thread.current.thread_variable_set(:stage5_fork_probe, :child)
           end
           Process.wait(pid)
-          Thread.current[:stage5_fork_probe] = :parent
+          Thread.current.thread_variable_set(:stage5_fork_probe, :parent)
         RUBY
       )
 
@@ -225,7 +230,7 @@ RSpec.describe 'targeted runtime probe integration' do
         end
       end
       counts = operation_sets.map do |operations|
-        operations.count { |operation, _line, _sequence, _kind| operation == 'Thread.current.[]=' }
+        operations.count { |operation, _line, _sequence, _kind| operation == 'Thread.thread_variable_set' }
       end
       expect(counts).to eq([1, 1]), operation_sets.inspect
       expect(streams.map { |path, _records| File.binread(path) }.join).not_to include('stage5_fork_probe')
