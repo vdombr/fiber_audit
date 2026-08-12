@@ -1,14 +1,16 @@
 # FiberAudit
 
 FiberAudit audits Ruby and Rails code for operations that can block the thread
-running a Fiber scheduler. Version 0.1.0 performs static analysis only.
+running a Fiber scheduler. Version 0.2.0 includes static analysis and an explicit,
+observational runtime audit.
 
-> **Static-only disclaimer:** This is a static-only audit. PASS cannot be
-> granted without runtime coverage.
+> **Safety disclaimer:** FiberAudit does not prove that an application is
+> fiber-safe. Static findings are hypotheses, and absence of runtime events does
+> not establish complete coverage. FiberAudit does not emit unconditional `PASS`.
 
 ## Requirements and installation
 
-FiberAudit v0.1.0 supports Ruby 3.3 and 3.4.
+FiberAudit v0.2.0 supports Ruby 3.3 and 3.4.
 
 ```sh
 gem install fiber_audit
@@ -60,7 +62,7 @@ Explicit `--format` always wins.
 
 Use `fiber-audit explain <RULE_ID>` for exact targets and remediation.
 
-## Runtime audit (unreleased v0.2 work)
+## Runtime audit
 
 The explicit runtime command observes only a command supplied after `--`; it
 never executes source fragments discovered by static analysis:
@@ -188,7 +190,7 @@ Missing reasons and invalid configuration return exit code 2.
 - `PASS_WITH_WARNINGS` — only low or informational findings.
 - `NO_FINDINGS` — no findings at the configured threshold.
 
-FiberAudit never emits unconditional `PASS` in v0.1.0.
+FiberAudit never emits unconditional `PASS` in v0.2.0.
 
 ## Exit codes
 
@@ -197,10 +199,10 @@ FiberAudit never emits unconditional `PASS` in v0.1.0.
 | 0 | No active finding at or above the configured threshold |
 | 1 | One or more active findings at or above the threshold |
 | 2 | Invalid options, configuration, analysis, or report output |
-| 3 | Reserved; never emitted by v0.1.0 |
+| 3 | Reserved; never emitted by v0.2.0 |
 
 Source parse errors are included in report data while analysis continues on
 other files.
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for implementation boundaries and the
-future runtime-analysis architecture.
+See [ARCHITECTURE.md](ARCHITECTURE.md) for implementation boundaries, runtime
+architecture, and explicitly deferred correlation work.

@@ -56,7 +56,7 @@ RSpec.describe FiberAudit::Reporters::Text do
         reporter = described_class.new(color: false)
         output = reporter.render(result)
 
-        expect(output).to include('FiberAudit 0.1.0 — static analysis')
+        expect(output).to include("FiberAudit #{FiberAudit::VERSION} — static analysis")
       end
 
       it 'includes summary severity, suppressed, and total counts' do

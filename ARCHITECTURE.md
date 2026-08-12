@@ -16,10 +16,11 @@ It is designed to answer:
 5. What should an application owner review or remediate?
 
 FiberAudit does **not** prove that an application is fiber-safe. Static analysis
-produces hypotheses; future runtime analysis may confirm scheduler starvation.
-A static-only result must never claim an unconditional `PASS`.
+produces hypotheses, while observational runtime sessions provide bounded evidence
+without establishing complete coverage. FiberAudit never claims unconditional
+`PASS`.
 
-> **Repository status:** the v0.1.0 static pipeline is implemented end to end:
+> **Repository status:** v0.2.0 includes the v0.1.0 static pipeline end to end:
 > project discovery, configuration, semantic and syntax analysis, execution
 > contexts, FA1001–FA1007, suppressions, status derivation, text/JSON reports,
 > and the CLI. The v0.2 runtime contracts, bounded JSONL recorder, explicit
@@ -80,7 +81,7 @@ A high-impact heuristic can therefore be `severity: :high` and
 
 ### 4.3 Findings are the integration boundary
 
-Static rules—and future runtime probes—emit the same `Finding` model.
+Static rules—and future runtime correlation—use the same `Finding` model.
 Suppressions, status derivation, reporters, and future correlation operate on
 findings rather than AST or semantic-index objects.
 

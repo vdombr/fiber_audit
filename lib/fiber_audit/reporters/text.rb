@@ -11,7 +11,7 @@ module FiberAudit
     # Calls Schema.build then Schema.validate! to enforce the contract.
     #
     # Exact contract:
-    # - Header: `FiberAudit 0.1.0 — static analysis`
+    # - Header: `FiberAudit <version> — static analysis`
     # - Summary counts, suppressed, status
     # - Disclaimer under status
     # - Findings: RULE  SEVERITY  path:line
