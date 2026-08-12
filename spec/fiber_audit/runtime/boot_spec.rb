@@ -44,7 +44,8 @@ RSpec.describe 'FiberAudit runtime boot' do
         puts FiberAudit::Runtime::Boot.activated?
         puts defined?(FiberAudit::Static).nil?
       RUBY
-      stdout, stderr, status = Open3.capture3(RbConfig.ruby, '-Ilib', '-e', script, chdir: root)
+      lib_path = File.expand_path('../../../lib', __dir__)
+      stdout, stderr, status = Open3.capture3(RbConfig.ruby, "-I#{lib_path}", '-e', script, chdir: root)
 
       expect(status).to be_success, stderr
       expect(stdout.lines.map(&:strip)).to eq(%w[false true])

@@ -7,7 +7,7 @@ require 'fiber_audit/runtime/probes/base'
 RSpec.describe FiberAudit::Runtime::Probes::Base do
   let(:session_id) { '123e4567-e89b-42d3-a456-426614174000' }
 
-  def build_base(fail_open: true, sampling_rate: 1.0, probe_times: [100, 150])
+  def build_base(fail_open: true, sampling_rate: 1.0, probe_times: [100, 150], execution_context_store: nil)
     policy = FiberAudit::Runtime::Policy.new(
       sampling_rate: sampling_rate,
       fail_open: fail_open,
@@ -47,7 +47,8 @@ RSpec.describe FiberAudit::Runtime::Probes::Base do
       recorder: recorder,
       clock: probe_clock,
       redactor: FiberAudit::Runtime::Redactor.new(root: Dir.pwd, policy: policy),
-      active_operations: operations
+      active_operations: operations,
+      execution_context_store: execution_context_store
     )
     [base, recorder, operations, io]
   end
@@ -193,5 +194,88 @@ RSpec.describe FiberAudit::Runtime::Probes::Base do
     expect(result).to eq(:result)
     expect(operations.size).to eq(0)
     expect(events(io)).to be_empty
+  end
+
+  context 'with execution context store' do
+    let(:context_store) { FiberAudit::Runtime::ExecutionContext }
+
+    before do
+      context_store.reset!
+    end
+
+    after do
+      context_store.reset!
+    end
+
+    it 'captures context at operation start and uses it in emitted events' do
+      base, recorder, _, io = build_base(execution_context_store: context_store)
+
+      context_store.with(:request) do
+        base.observe(operation: 'Mutex#lock') { :result }
+      end
+      recorder.close
+
+      event = events(io).first
+      expect(event.dig('payload', 'execution_context')).to eq('request')
+    end
+
+    it 'captures context at operation start and stores it in active operations' do
+      base, recorder, operations, = build_base(execution_context_store: context_store)
+      snapshot = nil
+
+      context_store.with(:request) do
+        base.observe(operation: 'ConditionVariable#wait') do
+          snapshot = operations.snapshot
+          :done
+        end
+      end
+
+      expect(snapshot.map(&:operation)).to eq(['ConditionVariable#wait'])
+      expect(snapshot.first.execution_context).to eq(:request)
+      recorder.close
+    end
+
+    it 'retains start context in event even when context changes during operation' do
+      base, recorder, _, io = build_base(execution_context_store: context_store)
+
+      context_store.with(:request) do
+        base.observe(operation: 'Mutex#lock') do
+          # Change context during operation
+          context_store.with(:job) do
+            :inner_result
+          end
+        end
+      end
+      recorder.close
+
+      event = events(io).first
+      # Event should have the start context (:request), not the changed context (:job)
+      expect(event.dig('payload', 'execution_context')).to eq('request')
+    end
+
+    it 'retains start context in aborted operations' do
+      base, recorder, _, io = build_base(execution_context_store: context_store)
+      error = Class.new(StandardError).new('test error')
+
+      context_store.with(:request) do
+        expect do
+          base.observe(operation: 'Thread.join') { raise error }
+        end.to(raise_error { |raised| expect(raised).to equal(error) })
+      end
+      recorder.close
+
+      event = events(io).first
+      expect(event.dig('payload', 'execution_context')).to eq('request')
+    end
+
+    it 'defaults to unknown when no context store is provided' do
+      base, recorder, _, io = build_base
+
+      base.observe(operation: 'Mutex#lock') { :result }
+      recorder.close
+
+      event = events(io).first
+      expect(event.dig('payload', 'execution_context')).to eq('unknown')
+    end
   end
 end

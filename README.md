@@ -78,8 +78,15 @@ project-relative callsite. They never contain commands, URLs, addresses, ports,
 headers, payloads, responses, exception data, or thread-local keys and values.
 Libraries such as Open3, Monitor, Socket, Net::HTTP, and OpenURI may be loaded
 after runtime boot; FiberAudit rescans only these known targets after `require`.
-Runtime execution context remains `unknown` until the optional Rails integration
-is implemented in the next stage.
+
+Rails execution contexts (`:request`, `:middleware`, `:job`, `:websocket`) are
+captured automatically when Rails integration is active. A bounded, PID-aware
+fiber-local context stack tracks the current execution context during probe
+observations. Rails boundaries are wrapped via prepend hooks that become inert
+after deactivation or fork, preserving application semantics without interfering
+with normal Rails operation. The integration supports late loading: hooks are
+installed when Rails components become available, even after runtime boot.
+Static/runtime correlation remains future work.
 
 The scheduler watchdog records one bounded start/completion pair when its
 scheduler-owned heartbeat stops progressing past the configured threshold.

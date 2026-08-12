@@ -311,4 +311,103 @@ RSpec.describe FiberAudit::Runtime::Lifecycle do
       def flush; end
     end
   end
+
+  context 'with execution context store and Rails integration' do
+    before do
+      FiberAudit::Runtime::ExecutionContext.reset!
+    end
+
+    after do
+      FiberAudit::Runtime::ExecutionContext.reset!
+    end
+
+    it 'creates context store and activates Rails integration when probes are enabled' do
+      with_runtime do |root, output|
+        streams = {}
+        lifecycle = described_class.start(
+          settings: build_settings(root: root, output: output),
+          probes_enabled: true,
+          clock: build_clock,
+          session_id_source: -> { session_ids.first },
+          pid_source: -> { 4600 },
+          writer_factory: memory_writer_factory(streams)
+        )
+
+        expect(lifecycle.execution_context_store).to eq(FiberAudit::Runtime::ExecutionContext)
+        expect(lifecycle.rails_integration).to be_a(FiberAudit::Runtime::RailsIntegration)
+        expect(lifecycle.rails_integration).to be_active_for_current_process
+        integration = lifecycle.rails_integration
+        lifecycle.shutdown
+
+        expect(integration).not_to be_active_for_current_process
+      end
+    end
+
+    it 'does not create context store or Rails integration when probes are disabled' do
+      with_runtime do |root, output|
+        streams = {}
+        lifecycle = described_class.start(
+          settings: build_settings(root: root, output: output),
+          probes_enabled: false,
+          clock: build_clock,
+          session_id_source: -> { session_ids.first },
+          pid_source: -> { 4700 },
+          writer_factory: memory_writer_factory(streams)
+        )
+
+        expect(lifecycle.execution_context_store).to be_nil
+        expect(lifecycle.rails_integration).to be_nil
+        lifecycle.shutdown
+      end
+    end
+
+    it 'resets context store and rebuilds Rails integration after fork' do
+      with_runtime do |root, output|
+        streams = {}
+        ids = session_ids.dup
+        pid = 6700
+        lifecycle = described_class.start(
+          settings: build_settings(root: root, output: output),
+          probes_enabled: true,
+          clock: build_clock,
+          session_id_source: -> { ids.shift },
+          pid_source: -> { pid },
+          writer_factory: memory_writer_factory(streams)
+        )
+
+        parent_integration = lifecycle.rails_integration
+        FiberAudit::Runtime::ExecutionContext.with(:request) do
+          pid = 6701
+          lifecycle.ensure_current_process!
+
+          # Context should be reset after fork
+          expect(FiberAudit::Runtime::ExecutionContext.current).to eq(:unknown)
+          # Rails integration should be rebuilt
+          expect(lifecycle.rails_integration).not_to equal(parent_integration)
+        end
+        lifecycle.shutdown
+      end
+    end
+
+    it 'deactivates Rails integration before probes during shutdown' do
+      with_runtime do |root, output|
+        streams = {}
+        lifecycle = described_class.start(
+          settings: build_settings(root: root, output: output),
+          probes_enabled: true,
+          clock: build_clock,
+          session_id_source: -> { session_ids.first },
+          pid_source: -> { 4800 },
+          writer_factory: memory_writer_factory(streams)
+        )
+
+        integration = lifecycle.rails_integration
+        expect(integration).to be_active_for_current_process
+
+        lifecycle.shutdown
+
+        expect(integration).not_to be_active_for_current_process
+      end
+    end
+  end
 end

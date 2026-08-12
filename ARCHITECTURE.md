@@ -24,8 +24,8 @@ A static-only result must never claim an unconditional `PASS`.
 > contexts, FA1001–FA1007, suppressions, status derivation, text/JSON reports,
 > and the CLI. The v0.2 runtime contracts, bounded JSONL recorder, explicit
 > child-process boot, lifecycle, supervising command, bounded scheduler
-> watchdog, and targeted FA1001–FA1007 operation probes are implemented;
-> Rails runtime context and static/runtime correlation remain future work.
+> watchdog, targeted FA1001–FA1007 operation probes, and Rails runtime execution
+> contexts are implemented; static/runtime correlation remains future work.
 
 ## 2. Scope
 
@@ -665,6 +665,22 @@ stall, and only then closes the recorder. Fork rebinding discards inherited prob
 and watchdog references before touching their locks and creates process-local
 replacements.
 
+Stage 6 adds Rails execution context detection. A bounded, PID-aware fiber-local
+context stack tracks the current execution context during probe observations.
+The fiber-local stack uses `Fiber.current` instance variables to avoid thread-local
+key visibility, validates against `Context::ALL`, enforces `MAX_DEPTH = 32`, and
+resets on fork. A process-local `RailsIntegration` class hooks into Rails boundaries
+via `Module#prepend`: Rack middleware (`:middleware`), `ActionController::Metal#process_action`
+(`:request`), `ActiveJob::Base#perform_now` (`:job`), and `ActionCable::Channel::Base#dispatch_action`
+(`:websocket`). Wrappers consult the active integration before setting context and become
+inert after deactivation or fork, preserving application semantics. The integration
+supports late loading: hooks are installed when Rails components become available,
+even after runtime boot. Probe observations snapshot the context once at start and
+propagate it through active operations and events. Lifecycle wires context store and
+Rails integration ownership, shutdown deactivates Rails integration before probes,
+and fork rebinding resets context and rebuilds integration. JSONL schema 1.0 and
+privacy requirements are preserved; no new schema fields are added.
+
 Loading the gem normally performs no instrumentation, fibers, threads, or file
 I/O. The observer is activated only by explicit runtime boot. A native operation
 that retains Ruby's GVL can prevent the watchdog thread from running until the
@@ -673,7 +689,6 @@ never clean certification.
 
 Remaining runtime concepts include:
 
-- Rails request and callback correlation;
 - static/runtime evidence merging;
 - runtime coverage sufficient to support future `PASS` semantics.
 

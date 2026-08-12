@@ -20,6 +20,13 @@
   project callsites, active-operation overlap, strict recursion protection, late
   standard-library installation, and no captured commands, URLs, addresses,
   payloads, exception data, or thread-local values.
+- Rails runtime execution-context detection with bounded, PID-aware fiber-local
+  context stack and process-local Rails integration. Hooks into Rack middleware,
+  ActionController, ActiveJob, and ActionCable boundaries with inert wrappers
+  after deactivation or fork. Snapshots context at probe observation start and
+  propagates through active operations and events while preserving JSONL schema
+  1.0, privacy requirements, and lifecycle ownership. Static/runtime correlation
+  remains future work.
 
 ## 0.1.0 (2026-08-02)
 

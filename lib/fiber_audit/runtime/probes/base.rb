@@ -3,6 +3,8 @@
 require_relative '../active_operations'
 require_relative '../clock'
 require_relative '../event'
+require_relative '../execution_context'
+require_relative '../rails_integration'
 require_relative '../recorder'
 require_relative '../redactor'
 
@@ -10,6 +12,7 @@ module FiberAudit
   module Runtime
     module Probes
       # Shared behavior-preserving observation boundary for targeted wrappers.
+      # rubocop:disable Metrics/ClassLength
       class Base
         SOURCE = :targeted_probe
         MAX_CALLSITE_FRAMES = 32
@@ -23,17 +26,20 @@ module FiberAudit
           :handle,
           :thread_id,
           :fiber_id,
-          :measurements
+          :measurements,
+          :execution_context
         )
 
-        attr_reader :recorder, :clock, :redactor, :active_operations, :owner_pid
+        attr_reader :recorder, :clock, :redactor, :active_operations, :owner_pid, :execution_context_store
 
-        def initialize(recorder:, clock:, redactor:, active_operations:, pid_source: Process.method(:pid))
-          validate_dependencies!(recorder, clock, redactor, active_operations, pid_source)
+        def initialize(recorder:, clock:, redactor:, active_operations:, execution_context_store: nil,
+                       pid_source: Process.method(:pid))
+          validate_dependencies!(recorder, clock, redactor, active_operations, execution_context_store, pid_source)
           @recorder = recorder
           @clock = clock
           @redactor = redactor
           @active_operations = active_operations
+          @execution_context_store = execution_context_store
           @pid_source = pid_source
           @owner_pid = current_pid
           @active = true
@@ -93,17 +99,22 @@ module FiberAudit
 
         private
 
-        def validate_dependencies!(candidate_recorder, candidate_clock, candidate_redactor, operations, pids)
+        def validate_dependencies!(candidate_recorder, candidate_clock, candidate_redactor, operations, context_store, pids)
           raise RuntimeContractError, 'recorder must be a Runtime::Recorder' unless candidate_recorder.is_a?(Recorder)
           raise RuntimeContractError, 'clock must be a Runtime::Clock' unless candidate_clock.is_a?(Clock)
           raise RuntimeContractError, 'redactor must be a Runtime::Redactor' unless candidate_redactor.is_a?(Redactor)
           unless operations.is_a?(ActiveOperations)
             raise RuntimeContractError, 'active_operations must be Runtime::ActiveOperations'
           end
+          if context_store && !context_store.respond_to?(:current)
+            raise RuntimeContractError, 'execution_context_store must respond to current'
+          end
           raise RuntimeContractError, 'pid_source must respond to call' unless pids.respond_to?(:call)
         end
 
         def prepare_observation(operation, measurements)
+          # The block keeps all preparation under one recursion guard.
+          # rubocop:disable Metrics/BlockLength
           with_guard do
             canonical_operation = Validation.operation(operation)
             normalized_measurements = normalize_measurements(measurements)
@@ -113,11 +124,12 @@ module FiberAudit
 
             thread = Thread.current
             fiber = Fiber.current
+            captured_context = capture_execution_context
             handle = active_operations.register(
               operation: canonical_operation,
               monotonic_ns: started_ns,
               location: location,
-              execution_context: :unknown,
+              execution_context: captured_context,
               thread: thread,
               fiber: fiber
             )
@@ -128,9 +140,19 @@ module FiberAudit
               handle: handle,
               thread_id: thread.object_id,
               fiber_id: fiber.object_id,
-              measurements: normalized_measurements
+              measurements: normalized_measurements,
+              execution_context: captured_context
             )
           end
+          # rubocop:enable Metrics/BlockLength
+        end
+
+        def capture_execution_context
+          return Context::UNKNOWN unless execution_context_store
+
+          execution_context_store.current
+        rescue StandardError
+          Context::UNKNOWN
         end
 
         def emit_start_observation(observation)
@@ -199,7 +221,7 @@ module FiberAudit
               duration_ns: duration_ns,
               operation: observation.operation,
               location: observation.location,
-              execution_context: :unknown,
+              execution_context: observation.execution_context,
               thread_id: observation.thread_id,
               fiber_id: observation.fiber_id,
               measurements: values
@@ -305,6 +327,7 @@ module FiberAudit
           raise RuntimeContractError, 'pid_source must return a positive Integer'
         end
       end
+      # rubocop:enable Metrics/ClassLength
     end
   end
 end

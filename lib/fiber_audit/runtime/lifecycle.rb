@@ -4,6 +4,8 @@ require 'securerandom'
 require_relative 'clock'
 require_relative 'active_operations'
 require_relative 'environment'
+require_relative 'execution_context'
+require_relative 'rails_integration'
 require_relative 'jsonl/writer'
 require_relative 'recorder'
 require_relative 'redactor'
@@ -15,10 +17,12 @@ require_relative 'watchdog_policy'
 
 module FiberAudit
   module Runtime
+    # rubocop:disable Metrics/ClassLength
     class Lifecycle
       attr_reader :settings, :owner_pid, :output_path, :recorder,
                   :watchdog, :active_operations, :watchdog_policy,
-                  :redactor, :probe_registry
+                  :redactor, :probe_registry, :execution_context_store,
+                  :rails_integration
 
       def self.start(...)
         new(...)
@@ -55,6 +59,8 @@ module FiberAudit
         @active_operations = nil
         @redactor = nil
         @probe_registry = nil
+        @execution_context_store = nil
+        @rails_integration = nil
         start_process_session!
       rescue StandardError => e
         startup_failure!(e)
@@ -85,7 +91,11 @@ module FiberAudit
         @active_operations = nil
         @redactor = nil
         @probe_registry = nil
+        @execution_context_store = nil
+        @rails_integration = nil
         @state = :starting
+        # Reset fiber-local context after fork
+        ExecutionContext.reset!
         start_process_session!
         self
       rescue StandardError => e
@@ -163,11 +173,56 @@ module FiberAudit
       def setup_runtime_observers!
         @active_operations = ActiveOperations.new(pid_source: @pid_source)
         @redactor = Redactor.new(root: settings.project_root, policy: settings.policy)
+        @execution_context_store = ExecutionContext if @probes_enabled
         setup_watchdog! if watchdog_policy
+        setup_rails_integration! if @probes_enabled
         setup_probes! if @probes_enabled
       rescue StandardError => e
-        recorder.internal_error!
+        unless e.instance_variable_defined?(:@fiber_audit_runtime_accounted)
+          recorder.internal_error!
+          e.instance_variable_set(:@fiber_audit_runtime_accounted, true)
+        end
+        deactivate_active_components!
         close_failed_startup!(e)
+      end
+
+      def deactivate_active_components!
+        # Deactivate components in reverse order of setup
+        begin
+          Probes::Registry.deactivate(@probe_registry) if @probe_registry
+        rescue StandardError
+          nil
+        ensure
+          @probe_registry = nil
+        end
+        begin
+          RailsIntegration.deactivate(@rails_integration) if @rails_integration
+        rescue StandardError
+          nil
+        ensure
+          @rails_integration = nil
+        end
+        begin
+          if @scheduler_observer
+            SchedulerObserver.deactivate(@scheduler_observer)
+            @watchdog&.stop
+          end
+        rescue StandardError
+          nil
+        ensure
+          @scheduler_observer = nil
+          @watchdog = nil
+        end
+      end
+
+      def setup_rails_integration!
+        @rails_integration = RailsIntegration.activate(
+          context_store: @execution_context_store,
+          recorder: recorder
+        )
+      rescue StandardError
+        @rails_integration = nil
+        raise unless settings.policy.fail_open?
       end
 
       def setup_watchdog!
@@ -187,6 +242,7 @@ module FiberAudit
           clock: @clock,
           redactor: redactor,
           active_operations: active_operations,
+          execution_context_store: @execution_context_store,
           pid_source: @pid_source
         )
         @probe_registry = Probes::Registry.activate(base: base)
@@ -222,10 +278,19 @@ module FiberAudit
         @active_operations = nil
         @redactor = nil
         @probe_registry = nil
+        @execution_context_store = nil
+        @rails_integration = nil
       end
 
       def stop_runtime_observers
         error = nil
+        begin
+          RailsIntegration.deactivate(@rails_integration) if @rails_integration
+        rescue StandardError => e
+          error ||= e
+        ensure
+          @rails_integration = nil
+        end
         begin
           Probes::Registry.deactivate(probe_registry) if probe_registry
         rescue StandardError => e
@@ -273,5 +338,6 @@ module FiberAudit
         :aborted
       end
     end
+    # rubocop:enable Metrics/ClassLength
   end
 end
