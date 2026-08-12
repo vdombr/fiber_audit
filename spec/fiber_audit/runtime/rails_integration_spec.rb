@@ -189,6 +189,46 @@ RSpec.describe FiberAudit::Runtime::RailsIntegration do
   end
 
   describe 'middleware' do
+    it 'does not instantiate a partially loaded Rails application' do
+      rails = Module.new
+      rails.define_singleton_method(:application) { raise 'application getter must not run' }
+      stub_const('Rails', rails)
+
+      expect do
+        described_class.activate(context_store: FiberAudit::Runtime::ExecutionContext)
+      end.not_to raise_error
+    end
+
+    it 'installs into an existing Rails application middleware stack' do
+      stack = instance_double('middleware stack', any?: false)
+      config = Struct.new(:middleware).new(stack)
+      application = Struct.new(:config).new(config)
+      rails = Module.new
+      rails.instance_variable_set(:@application, application)
+      stub_const('Rails', rails)
+      expect(stack).to receive(:insert_before).with(0, described_class::Middleware).once
+
+      described_class.activate(context_store: FiberAudit::Runtime::ExecutionContext)
+    end
+
+    it 'does not add middleware already copied into a replacement stack' do
+      entry = Struct.new(:klass).new(described_class::Middleware)
+      stack = Class.new(Array) do
+        def insert_before(*)
+          raise 'middleware must not be added twice'
+        end
+      end.new([entry])
+      config = Struct.new(:middleware).new(stack)
+      application = Struct.new(:config).new(config)
+      rails = Module.new
+      rails.instance_variable_set(:@application, application)
+      stub_const('Rails', rails)
+
+      expect do
+        described_class.activate(context_store: FiberAudit::Runtime::ExecutionContext)
+      end.not_to raise_error
+    end
+
     it 'wraps downstream call with :middleware context' do
       described_class.activate(context_store: FiberAudit::Runtime::ExecutionContext)
       captured = nil
@@ -315,6 +355,17 @@ RSpec.describe FiberAudit::Runtime::RailsIntegration do
   end
 
   describe 'late loading' do
+    it 'does not trigger framework autoloads while rescanning' do
+      action_cable = Module.new
+      action_cable.autoload(:Channel, '/missing/fiber_audit_action_cable_channel')
+      stub_const('ActionCable', action_cable)
+
+      expect do
+        described_class.activate(context_store: FiberAudit::Runtime::ExecutionContext)
+      end.not_to raise_error
+      expect(ActionCable.autoload?(:Channel)).to eq('/missing/fiber_audit_action_cable_channel')
+    end
+
     it 'rescans automatically after a successful require' do
       stub_const('ActionCable', Module.new)
       stub_const('ActionCable::Channel', Module.new)

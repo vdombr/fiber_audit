@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 0.2.1 (2026-08-12)
+
+### Fixed
+
+- Rails 8 and Zeitwerk compatibility during runtime boot: avoid reentrant
+  application initialization and premature constant autoloads, preserve
+  Zeitwerk directory autoload semantics, and avoid duplicate insertion into a
+  copied or frozen middleware stack.
+- Install the runtime context middleware at the outer edge of the Rails stack so
+  application middleware operations are classified as `middleware`.
+
 ## 0.2.0 (2026-08-12)
 
 ### Added

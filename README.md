@@ -1,7 +1,7 @@
 # FiberAudit
 
 FiberAudit audits Ruby and Rails code for operations that can block the thread
-running a Fiber scheduler. Version 0.2.0 includes static analysis and an explicit,
+running a Fiber scheduler. Version 0.2.1 includes static analysis and an explicit,
 observational runtime audit.
 
 > **Safety disclaimer:** FiberAudit does not prove that an application is
@@ -10,7 +10,7 @@ observational runtime audit.
 
 ## Requirements and installation
 
-FiberAudit v0.2.0 supports Ruby 3.3 and 3.4.
+FiberAudit v0.2.1 supports Ruby 3.3 and 3.4.
 
 ```sh
 gem install fiber_audit
@@ -190,7 +190,7 @@ Missing reasons and invalid configuration return exit code 2.
 - `PASS_WITH_WARNINGS` — only low or informational findings.
 - `NO_FINDINGS` — no findings at the configured threshold.
 
-FiberAudit never emits unconditional `PASS` in v0.2.0.
+FiberAudit never emits unconditional `PASS` in v0.2.1.
 
 ## Exit codes
 
@@ -199,7 +199,7 @@ FiberAudit never emits unconditional `PASS` in v0.2.0.
 | 0 | No active finding at or above the configured threshold |
 | 1 | One or more active findings at or above the threshold |
 | 2 | Invalid options, configuration, analysis, or report output |
-| 3 | Reserved; never emitted by v0.2.0 |
+| 3 | Reserved; never emitted by v0.2.1 |
 
 Source parse errors are included in report data while analysis continues on
 other files.

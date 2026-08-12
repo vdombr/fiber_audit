@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "tool_version": "0.2.0",
+  "tool_version": "0.2.1",
   "status": "FAIL",
   "disclaimer": "This is a static-only audit. PASS cannot be granted without runtime coverage.",
   "summary": {

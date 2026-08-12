@@ -125,6 +125,15 @@ module FiberAudit
       def install_require_hook
         return if @require_hook_installed
 
+        # Zeitwerk replaces Kernel#require. Load its optional integration before
+        # prepending FiberAudit so later Rails autoloads retain Zeitwerk's require
+        # semantics. This remains a no-op when Zeitwerk is not installed.
+        begin
+          require 'zeitwerk'
+        rescue LoadError
+          nil
+        end
+
         # Install narrow guarded require hook for late Rails loading
         # Independent of probe registry
         ::Kernel.prepend(RequireHook) unless ::Kernel.ancestors.include?(RequireHook)
@@ -132,37 +141,69 @@ module FiberAudit
       end
 
       def install_controller_hook
-        return unless defined?(::ActionController::Metal)
+        namespace = loaded_constant(Object, :ActionController)
+        target = loaded_constant(namespace, :Metal)
+        return unless target
 
-        ::ActionController::Metal.prepend(ControllerHook) unless ::ActionController::Metal.ancestors.include?(ControllerHook)
+        target.prepend(ControllerHook) unless target.ancestors.include?(ControllerHook)
       end
 
       def install_job_hook
-        return unless defined?(::ActiveJob::Base)
+        namespace = loaded_constant(Object, :ActiveJob)
+        target = loaded_constant(namespace, :Base)
+        return unless target
 
-        ::ActiveJob::Base.prepend(JobHook) unless ::ActiveJob::Base.ancestors.include?(JobHook)
+        target.prepend(JobHook) unless target.ancestors.include?(JobHook)
       end
 
       def install_cable_hook
-        return unless defined?(::ActionCable::Channel::Base)
+        namespace = loaded_constant(Object, :ActionCable)
+        channel = loaded_constant(namespace, :Channel)
+        target = loaded_constant(channel, :Base)
+        return unless target
 
-        ::ActionCable::Channel::Base.prepend(CableHook) unless ::ActionCable::Channel::Base.ancestors.include?(CableHook)
+        target.prepend(CableHook) unless target.ancestors.include?(CableHook)
+      end
+
+      def loaded_constant(namespace, name)
+        return unless namespace.is_a?(Module)
+        return if namespace.autoload?(name)
+        return unless namespace.const_defined?(name, false)
+
+        namespace.const_get(name, false)
+      rescue NameError
+        nil
       end
 
       def try_install_middleware_hook
-        return unless defined?(::Rails) && ::Rails.respond_to?(:application) && ::Rails.application
+        rails = loaded_constant(Object, :Rails)
+        return unless rails
 
-        stack = ::Rails.application.config.middleware
-        return if @middleware_stack.equal?(stack)
+        # Rails.application may instantiate the application class. Calling it
+        # from a require hook while Rails itself is loading can re-enter a
+        # partially initialized application, so only inspect an existing instance.
+        application = rails.instance_variable_get(:@application)
+        return unless application
+
+        stack = application.config.middleware
+        return if @middleware_stack.equal?(stack) || middleware_installed_in?(stack)
 
         # Try to insert middleware into Rails stack. A replacement stack (for
         # example after a Rails reload) is eligible for installation again.
         begin
-          stack.use(Middleware)
+          stack.insert_before(0, Middleware)
           @middleware_stack = stack
         rescue StandardError => e
           # Stack may be finalized - that's okay, middleware is optional
           handle_installation_failure(e)
+        end
+      end
+
+      def middleware_installed_in?(stack)
+        return false unless stack.respond_to?(:any?)
+
+        stack.any? do |entry|
+          entry.equal?(Middleware) || (entry.respond_to?(:klass) && entry.klass.equal?(Middleware))
         end
       end
 

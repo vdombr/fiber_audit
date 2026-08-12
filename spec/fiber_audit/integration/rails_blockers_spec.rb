@@ -8,7 +8,7 @@ require 'pathname'
 RSpec.describe 'rails blockers golden report' do
   it 'matches the versioned report with portable paths and fingerprints' do
     root = File.expand_path('../../fixtures/apps/rails_blockers', __dir__)
-    golden_path = File.expand_path('../../fixtures/reports/rails_blockers_v0.2.json', __dir__)
+    golden_path = File.expand_path('../../fixtures/reports/rails_blockers_v0.2.1.json', __dir__)
     configuration = FiberAudit::Configuration.new
 
     absolute_result = FiberAudit::Audit.new(configuration: configuration, root: root).call

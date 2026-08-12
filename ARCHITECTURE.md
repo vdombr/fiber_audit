@@ -20,7 +20,7 @@ produces hypotheses, while observational runtime sessions provide bounded eviden
 without establishing complete coverage. FiberAudit never claims unconditional
 `PASS`.
 
-> **Repository status:** v0.2.0 includes the v0.1.0 static pipeline end to end:
+> **Repository status:** v0.2.1 includes the v0.1.0 static pipeline end to end:
 > project discovery, configuration, semantic and syntax analysis, execution
 > contexts, FA1001–FA1007, suppressions, status derivation, text/JSON reports,
 > and the CLI. The v0.2 runtime contracts, bounded JSONL recorder, explicit
