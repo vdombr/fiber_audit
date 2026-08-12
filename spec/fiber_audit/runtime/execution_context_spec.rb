@@ -4,7 +4,7 @@ require 'fiber_audit/runtime/execution_context'
 
 RSpec.describe FiberAudit::Runtime::ExecutionContext do
   after do
-    described_class.reset!
+    described_class.clear!
   end
 
   describe '.current' do
@@ -60,12 +60,10 @@ RSpec.describe FiberAudit::Runtime::ExecutionContext do
       end
     end
 
-    it 'bounds nesting depth and fails open when exceeded' do
-      # Fill the stack to MAX_DEPTH
+    it 'exposes :unknown when MAX_DEPTH is exceeded' do
       depth = described_class.const_get(:MAX_DEPTH)
       contexts = Array.new(depth) { :request }
 
-      # Build nested with calls
       execute_nested = lambda do |remaining, &block|
         if remaining.empty?
           block.call
@@ -77,36 +75,80 @@ RSpec.describe FiberAudit::Runtime::ExecutionContext do
       end
 
       execute_nested.call(contexts) do
-        # At MAX_DEPTH, the next with should fail open and keep :request
         described_class.with(:job) do
-          expect(described_class.current).to eq(:request) # Should still be :request, not :job
+          expect(described_class.current).to eq(:unknown)
+        end
+        expect(described_class.current).to eq(:request)
+      end
+    end
+
+    it 'returns the value of the block' do
+      result = described_class.with(:request) { 42 }
+      expect(result).to eq(42)
+    end
+
+    it 'restores context when block returns early' do
+      described_class.with(:request) do
+        described_class.with(:job) do
+          next
         end
         expect(described_class.current).to eq(:request)
       end
     end
   end
 
-  describe 'fiber isolation' do
-    it 'isolates context between fibers on the same thread' do
+  describe 'fiber propagation' do
+    it 'propagates current context to child fibers' do
       described_class.with(:request) do
-        fiber_context = nil
-        fiber = Fiber.new do
-          fiber_context = described_class.current
-          Fiber.yield
-        end
-        fiber.resume
-        expect(fiber_context).to eq(:unknown) # New fiber starts with :unknown
+        child_context = nil
+        Fiber.new { child_context = described_class.current }.resume
+        expect(child_context).to eq(:request)
         expect(described_class.current).to eq(:request)
       end
     end
 
-    it 'does not leak context to newly created fibers' do
+    it 'child fiber overrides do not alter parent context' do
       described_class.with(:request) do
-        fiber = Fiber.new do
-          expect(described_class.current).to eq(:unknown)
-        end
-        fiber.resume
+        Fiber.new do
+          described_class.with(:job) do
+            expect(described_class.current).to eq(:job)
+          end
+        end.resume
+        expect(described_class.current).to eq(:request)
       end
+    end
+
+    it 'child fiber created without context starts with :unknown' do
+      child_context = nil
+      Fiber.new { child_context = described_class.current }.resume
+      expect(child_context).to eq(:unknown)
+    end
+
+    it 'propagates context through multiple levels of fiber nesting' do
+      described_class.with(:request) do
+        grandchild_context = nil
+        Fiber.new do
+          Fiber.new do
+            grandchild_context = described_class.current
+          end.resume
+        end.resume
+        expect(grandchild_context).to eq(:request)
+      end
+    end
+
+    it 'child fiber sees context changes made before its creation' do
+      child_contexts = []
+      described_class.with(:request) do
+        Fiber.new do
+          child_contexts << described_class.current
+          described_class.with(:job) do
+            child_contexts << described_class.current
+          end
+          child_contexts << described_class.current
+        end.resume
+        expect(described_class.current).to eq(:request)
+      end
+      expect(child_contexts).to eq(%i[request job request])
     end
   end
 
@@ -123,10 +165,79 @@ RSpec.describe FiberAudit::Runtime::ExecutionContext do
         expect(described_class.current).to eq(:request)
       end
     end
+
+    it 'new threads start with :unknown context' do
+      described_class.with(:request) do
+        contexts = []
+        threads = 3.times.map do
+          Thread.new { contexts << described_class.current }
+        end
+        threads.each(&:join)
+        expect(contexts).to all(eq(:unknown))
+      end
+    end
+  end
+
+  describe '.clear!' do
+    it 'clears the current context' do
+      described_class.with(:request) do
+        described_class.clear!
+        expect(described_class.current).to eq(:unknown)
+      end
+    end
+
+    it 'is idempotent' do
+      described_class.clear!
+      described_class.clear!
+      expect(described_class.current).to eq(:unknown)
+    end
+
+    it 'is not undone by enclosing with ensure' do
+      described_class.with(:request) do
+        described_class.clear!
+        expect(described_class.current).to eq(:unknown)
+      end
+      expect(described_class.current).to eq(:unknown)
+    end
+
+    it 'is not undone by multiple levels of enclosing with' do
+      described_class.with(:request) do
+        described_class.with(:job) do
+          described_class.with(:callback) do
+            described_class.clear!
+            expect(described_class.current).to eq(:unknown)
+          end
+          expect(described_class.current).to eq(:unknown)
+        end
+        expect(described_class.current).to eq(:unknown)
+      end
+      expect(described_class.current).to eq(:unknown)
+    end
+
+    it 'affects only the current fiber' do
+      described_class.with(:request) do
+        Fiber.new do
+          described_class.clear!
+          expect(described_class.current).to eq(:unknown)
+        end.resume
+        expect(described_class.current).to eq(:request)
+      end
+    end
+
+    it 'allows new with blocks after clear' do
+      described_class.with(:request) do
+        described_class.clear!
+        described_class.with(:job) do
+          expect(described_class.current).to eq(:job)
+        end
+        expect(described_class.current).to eq(:unknown)
+      end
+      expect(described_class.current).to eq(:unknown)
+    end
   end
 
   describe '.reset!' do
-    it 'clears the current context' do
+    it 'is an alias for clear!' do
       described_class.with(:request) do
         described_class.reset!
         expect(described_class.current).to eq(:unknown)
@@ -138,6 +249,13 @@ RSpec.describe FiberAudit::Runtime::ExecutionContext do
       described_class.reset!
       expect(described_class.current).to eq(:unknown)
     end
+
+    it 'is not undone by enclosing with ensure' do
+      described_class.with(:request) do
+        described_class.reset!
+      end
+      expect(described_class.current).to eq(:unknown)
+    end
   end
 
   describe '.after_fork!' do
@@ -147,15 +265,46 @@ RSpec.describe FiberAudit::Runtime::ExecutionContext do
         expect(described_class.current).to eq(:unknown)
       end
     end
+
+    it 'allows new context after after_fork!' do
+      described_class.after_fork!
+      described_class.with(:request) do
+        expect(described_class.current).to eq(:request)
+      end
+    end
   end
 
   describe 'no application-visible keys' do
     it 'does not use Thread.current[] for storage' do
       described_class.with(:request) do
-        # Check that no fiber-audit related keys are visible in Thread.current
         thread_keys = Thread.current.keys.select { |k| k.to_s.include?('fiber_audit') }
         expect(thread_keys).to be_empty
       end
+    end
+
+    it 'uses Fiber storage which is not visible in Thread.current' do
+      described_class.with(:request) do
+        expect(Thread.current[:__fiber_audit_execution_context_frame__]).to be_nil
+        expect(Thread.current[:__fiber_audit_execution_context_pid__]).to be_nil
+      end
+    end
+  end
+
+  describe 'Frame immutability' do
+    it 'frames are frozen' do
+      frame = nil
+      described_class.with(:request) do
+        frame = described_class.send(:current_frame)
+      end
+      expect(frame).to be_frozen if frame
+    end
+
+    it 'frames cannot be mutated' do
+      frame = nil
+      described_class.with(:request) do
+        frame = described_class.send(:current_frame)
+      end
+      expect { frame.context = :job }.to raise_error(FrozenError) if frame
     end
   end
 end

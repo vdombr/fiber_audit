@@ -4,73 +4,80 @@ require_relative '../execution_context'
 
 module FiberAudit
   module Runtime
-    # Fiber-local execution context stack.
-    # Uses fiber instance variables for isolation without Thread#[] visibility.
-    # PID-aware to handle fork correctly.
+    # Fiber-local execution context with propagation to child fibers.
+    # Uses Ruby Fiber storage (Fiber[]) for fiber-local state that is
+    # inherited by child fibers at creation, enabling automatic context
+    # propagation across Fiber boundaries.
+    #
+    # Frames are immutable (frozen Data objects) forming a linked list.
+    # Each +with+ call creates a new frame pointing to the parent frame.
+    #
+    # Semantics:
+    # - Child fibers inherit the parent fiber's current context at creation
+    # - Child fiber overrides do not alter parent context
+    # - +clear!+ removes context for the current fiber only
+    # - +clear!+ inside nested +with+ is not undone by the enclosing ensure
+    #   (ensure restores only when its own frame is still the active one)
+    # - Thread isolation is maintained (each thread has its own Fiber storage)
+    # - PID mismatch (after fork) is treated as empty context
+    # - MAX_DEPTH overflow exposes :unknown rather than stale outer context
     module ExecutionContext
       MAX_DEPTH = 32
-      IVAR_KEY = :@__fiber_audit_execution_context__
-      IVAR_PID_KEY = :@__fiber_audit_execution_context_pid__
+      FRAME_KEY = :__fiber_audit_execution_context_frame__
+      PID_KEY   = :__fiber_audit_execution_context_pid__
+
+      # Immutable frame in the context chain.
+      Frame = Data.define(:context, :parent, :depth)
+      private_constant :Frame
 
       class << self
         def current
-          state = current_state
-          return Context::UNKNOWN unless state
-
-          state[:stack].last || Context::UNKNOWN
+          frame = current_frame
+          frame ? frame.context : Context::UNKNOWN
         end
 
+        # rubocop:disable Metrics/MethodLength
         def with(context)
           normalized = validate_context(context)
-          state = ensure_state
-          return yield if state[:stack].size >= MAX_DEPTH
+          parent = current_frame
 
-          state[:stack].push(normalized)
+          new_depth = parent ? parent.depth + 1 : 1
+          effective = new_depth > MAX_DEPTH ? Context::UNKNOWN : normalized
+          frame = Frame.new(context: effective, parent: parent, depth: new_depth)
+
+          Fiber[FRAME_KEY] = frame
+          Fiber[PID_KEY] = Process.pid
           begin
             yield
           ensure
-            state[:stack].pop
+            # Only restore if our frame is still the active one.
+            # If clear! was called (or another with replaced it), skip restore.
+            Fiber[FRAME_KEY] = parent if Fiber[FRAME_KEY].equal?(frame)
           end
         end
+        # rubocop:enable Metrics/MethodLength
 
-        def reset!
-          fiber = Fiber.current
-          fiber.remove_instance_variable(IVAR_KEY) if fiber.instance_variable_defined?(IVAR_KEY)
-          fiber.remove_instance_variable(IVAR_PID_KEY) if fiber.instance_variable_defined?(IVAR_PID_KEY)
+        def clear!
+          Fiber[FRAME_KEY] = nil
+          Fiber[PID_KEY] = nil
         end
 
+        # Compatibility alias for clear!.
+        def reset!
+          clear!
+        end
+
+        # Clear context after fork.
         def after_fork!
-          reset!
+          clear!
         end
 
         private
 
-        def current_state
-          fiber = Fiber.current
-          return nil unless fiber.instance_variable_defined?(IVAR_KEY)
+        def current_frame
+          return nil unless Fiber[PID_KEY] == Process.pid
 
-          pid = fiber.instance_variable_defined?(IVAR_PID_KEY) ? fiber.instance_variable_get(IVAR_PID_KEY) : nil
-          return nil unless pid == Process.pid
-
-          { stack: fiber.instance_variable_get(IVAR_KEY), pid: pid }
-        end
-
-        def ensure_state
-          fiber = Fiber.current
-          pid = Process.pid
-
-          if fiber.instance_variable_defined?(IVAR_KEY)
-            stored_pid = fiber.instance_variable_defined?(IVAR_PID_KEY) ? fiber.instance_variable_get(IVAR_PID_KEY) : nil
-            return { stack: fiber.instance_variable_get(IVAR_KEY), pid: pid } if stored_pid == pid
-
-            # PID mismatch - reset
-            reset!
-          end
-
-          stack = []
-          fiber.instance_variable_set(IVAR_KEY, stack)
-          fiber.instance_variable_set(IVAR_PID_KEY, pid)
-          { stack: stack, pid: pid }
+          Fiber[FRAME_KEY]
         end
 
         def validate_context(value)
