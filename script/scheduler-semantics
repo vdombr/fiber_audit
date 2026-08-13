@@ -26,6 +26,7 @@ module SchedulerSemantics
 
     def block(*) = raise(Invoked, :block)
     def unblock(*) = true
+    def fiber_interrupt(fiber, exception) = fiber.raise(exception)
     def kernel_sleep(*) = raise(Invoked, :kernel_sleep)
     def io_wait(*) = raise(Invoked, :io_wait)
     def io_select(*) = raise(Invoked, :io_select)

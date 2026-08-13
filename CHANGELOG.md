@@ -22,7 +22,8 @@
 - Reconciled scheduler observer state only after `Fiber.set_scheduler` accepts a
   change, so rejected replacement attempts preserve the previous observation.
 - Added Ruby 4.0 to the required CI matrix and executable local scheduler-semantic
-  reproductions under `script/scheduler-semantics`.
+  reproductions under `script/scheduler-semantics`, including Ruby 4's
+  `fiber_interrupt` scheduler protocol hook.
 
 ## 0.2.1 (2026-08-12)
 
