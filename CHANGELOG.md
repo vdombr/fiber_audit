@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.3.1 (2026-08-23)
+
 ### Added
 
 - Added a lifecycle-owned operation-liveness monitor with strict policy transport,
