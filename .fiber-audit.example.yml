@@ -1,4 +1,4 @@
-# FiberAudit v0.1 static-analysis configuration
+# FiberAudit configuration example
 static:
   # Globs are evaluated from the detected project root.
   include:
@@ -15,25 +15,19 @@ static:
   # suppressions_path: .fiber-audit-suppressions.yml
 
 rules:
-  # Disable an individual rule.
   FA1007:
     enabled: false
-
-  # Override severity before the execution-context ceiling is applied.
   FA1003:
     severity: low
 
 report:
-  # Reserved output formats supported by v0.1. The CLI emits one format per run.
   formats:
     - text
     - json
-
   # critical, high, medium, low, or info. Default low hides info findings.
   min_severity: low
 
-# The opt-in `fiber-audit runtime -- COMMAND` recorder, targeted operation
-# probes, and scheduler watchdog use these limits.
+# Used only by explicit `fiber-audit runtime -- COMMAND` activation.
 runtime:
   redaction:
     mode: strict
@@ -49,4 +43,9 @@ runtime:
     heartbeat_interval_ms: 25
     stall_threshold_ms: 100
     max_frames: 20
+  # Independent operation-age evidence. The threshold is exclusive.
+  operation_liveness:
+    enabled: true
+    poll_interval_ms: 100
+    long_active_threshold_ms: 1000
   fail_open: true

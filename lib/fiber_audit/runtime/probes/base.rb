@@ -7,6 +7,7 @@ require_relative '../execution_context'
 require_relative '../rails_integration'
 require_relative '../recorder'
 require_relative '../redactor'
+require_relative '../scheduler_evidence_classifier'
 require_relative '../scheduler_snapshot'
 
 module FiberAudit
@@ -216,14 +217,12 @@ module FiberAudit
             values.merge!(generated)
           end
           values[:operation_sequence] = observation.handle&.sequence
-          # Include scheduler snapshot measurements (immutable, captured at operation start)
-          values.merge!(observation.scheduler_snapshot.to_measurements) if observation.scheduler_snapshot
-          values
+          enrich_scheduler_evidence(values, observation)
         end
 
         def emit_observation(kind, observation, monotonic_ns:, duration_ns: nil, measurements: nil)
           values = measurements || observation.measurements.merge(operation_sequence: observation.handle&.sequence)
-          values = merge_scheduler_measurements_for_emit(values.dup, observation.scheduler_snapshot)
+          values = enrich_scheduler_evidence(values.dup, observation)
           recorder.record do
             Event.new(
               kind: kind,
@@ -241,12 +240,15 @@ module FiberAudit
           end
         end
 
-        def merge_scheduler_measurements_for_emit(values, scheduler_snapshot)
-          return values unless scheduler_snapshot
-
-          scheduler_snapshot.to_measurements.each do |key, value|
-            values[key.to_sym] = value unless values.key?(key.to_sym)
-          end
+        def enrich_scheduler_evidence(values, observation)
+          snapshot = observation.scheduler_snapshot
+          values.merge!(snapshot.to_measurements) if snapshot
+          values.merge!(
+            SchedulerEvidenceClassifier.measurements(
+              operation: observation.operation,
+              scheduler_snapshot: snapshot
+            )
+          )
           values
         end
 

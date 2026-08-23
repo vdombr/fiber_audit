@@ -9,6 +9,7 @@ GEM
   remote: https://rubygems.org/
   specs:
     ast (2.4.3)
+    benchmark (0.5.0)
     diff-lcs (1.6.2)
     json (2.21.1)
     language_server-protocol (3.17.0.6)
@@ -51,6 +52,7 @@ GEM
       prism (~> 1.7)
     ruby-progressbar (1.13.0)
     rubydex (0.2.9)
+    rubydex (0.2.9-aarch64-linux)
     rubydex (0.2.9-arm64-darwin)
     rubydex (0.2.9-x86_64-linux)
     unicode-display_width (3.2.0)
@@ -58,11 +60,13 @@ GEM
     unicode-emoji (4.2.0)
 
 PLATFORMS
+  aarch64-linux
   arm64-darwin-24
   ruby
   x86_64-linux
 
 DEPENDENCIES
+  benchmark (~> 0.4)
   fiber_audit!
   rake (~> 13.0)
   rspec (~> 3.12)
@@ -70,6 +74,7 @@ DEPENDENCIES
 
 CHECKSUMS
   ast (2.4.3) sha256=954615157c1d6a382bc27d690d973195e79db7f55e9765ac7c481c60bdb4d383
+  benchmark (0.5.0) sha256=465df122341aedcb81a2a24b4d3bd19b6c67c1530713fd533f3ff034e419236c
   diff-lcs (1.6.2) sha256=9ae0d2cba7d4df3075fe8cd8602a8604993efc0dfa934cff568969efb1909962
   fiber_audit (0.3.0)
   json (2.21.1) sha256=13a43df75d95641443f5702dff350f237164a9d811ff0f2c2800d4d980220583
@@ -91,6 +96,7 @@ CHECKSUMS
   rubocop-ast (1.50.0) sha256=b9ca88300da0803ee222ad20cdb30494c0a784eed06fdc35d254b06d662788db
   ruby-progressbar (1.13.0) sha256=80fc9c47a9b640d6834e0dc7b3c94c9df37f08cb072b7761e4a71e22cff29b33
   rubydex (0.2.9) sha256=c4c0f707586c01e59926b62a8193df38b5d00b7c35d35677dab1fb059903e289
+  rubydex (0.2.9-aarch64-linux) sha256=74391fd22c4b4ccca1b695d634daad13326e7cc81567e96549da17c5031265bb
   rubydex (0.2.9-arm64-darwin) sha256=1c014e3c244102739914d528202b1d0f54bdc3d1f85667b81b65ea22aabfa560
   rubydex (0.2.9-x86_64-linux) sha256=f500e843d285def8fc799e0f9a989b9ba2b01b9372bde6ab0a6831738b3f6956
   unicode-display_width (3.2.0) sha256=0cdd96b5681a5949cdbc2c55e7b420facae74c4aaf9a9815eee1087cb1853c42

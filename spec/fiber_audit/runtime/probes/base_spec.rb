@@ -300,6 +300,65 @@ RSpec.describe FiberAudit::Runtime::Probes::Base do
       expect(measurements['fiber_blocking']).to be(true)
     end
 
+    it 'preserves unknown scheduler state in emitted measurements' do
+      unknown = FiberAudit::Runtime::SchedulerSnapshot.new(scheduler_present: nil, fiber_blocking: nil)
+      allow(FiberAudit::Runtime::SchedulerSnapshotCapture).to receive(:capture).and_return(unknown)
+      base, recorder, _operations, io = build_base
+
+      base.observe(operation: 'Mutex#lock') { :result }
+      recorder.close
+
+      measurements = events(io).first.dig('payload', 'measurements')
+      expect(measurements).to include(
+        'scheduler_present' => nil,
+        'fiber_blocking' => nil,
+        'scheduler_io_select_supported' => nil,
+        'scheduler_process_wait_supported' => nil,
+        'scheduler_address_resolve_supported' => nil
+      )
+    end
+
+    it 'adds scalar operation-specific scheduler classification to targeted events' do
+      snapshot = FiberAudit::Runtime::SchedulerSnapshot.new(
+        scheduler_present: true,
+        fiber_blocking: false,
+        scheduler_process_wait_supported: true
+      )
+      allow(FiberAudit::Runtime::SchedulerSnapshotCapture).to receive(:capture).and_return(snapshot)
+      base, recorder, _operations, io = build_base
+
+      base.observe(operation: 'Process.wait', emit_start: true) { :result }
+      recorder.close
+
+      events(io).each do |event|
+        expect(event.dig('payload', 'measurements')).to include(
+          'operation_wait_possible' => true,
+          'operation_inventory_only' => false,
+          'operation_scheduler_capability_required' => true,
+          'operation_scheduler_capability_supported' => true,
+          'operation_scheduler_cooperation_available' => true
+        )
+      end
+    end
+
+    it 'preserves unknown classifier evidence as nil without string or nested measurements' do
+      snapshot = FiberAudit::Runtime::SchedulerSnapshot.new(scheduler_present: nil, fiber_blocking: nil)
+      allow(FiberAudit::Runtime::SchedulerSnapshotCapture).to receive(:capture).and_return(snapshot)
+      base, recorder, _operations, io = build_base
+
+      base.observe(operation: 'Process.wait') { :result }
+      recorder.close
+      measurements = events(io).first.dig('payload', 'measurements')
+
+      expect(measurements).to include(
+        'operation_scheduler_capability_supported' => nil,
+        'operation_scheduler_cooperation_available' => nil
+      )
+      expect(measurements.values).to all(satisfy do |value|
+        value.nil? || value == true || value == false || value.is_a?(Numeric)
+      end)
+    end
+
     it 'captures immutable scheduler snapshot in active operations' do
       base, recorder, operations, = build_base
       snapshot = nil

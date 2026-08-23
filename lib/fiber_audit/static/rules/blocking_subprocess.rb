@@ -4,6 +4,7 @@ require_relative 'base'
 require_relative '../../findings/evidence'
 require_relative '../../correlation/fingerprint'
 require_relative '../../findings/finding'
+require_relative '../../operation_semantics'
 require_relative '../../operation_vocabulary'
 
 module FiberAudit
@@ -32,31 +33,7 @@ module FiberAudit
         TARGETS = OperationVocabulary::FA1001_TARGETS
         BARE_KERNEL_METHODS = OperationVocabulary::FA1001_KERNEL_METHODS
 
-        # Per-operation semantic category
-        OPERATION_CATEGORY = {
-          # Creation (info) - spawning a new process
-          'Kernel.spawn' => :creation,
-          'Process.spawn' => :creation,
-          # Replacement (info) - replacing current process via exec
-          'Kernel.exec' => :replacement,
-          'Process.exec' => :replacement,
-          # Waiting (medium) - blocking waits for subprocess completion
-          'Kernel.system' => :waiting,
-          'Process.wait' => :waiting,
-          'Process.wait2' => :waiting,
-          'Process.waitpid' => :waiting,
-          'Process.waitpid2' => :waiting,
-          'Process.waitall' => :waiting,
-          'Process::Status.wait' => :waiting,
-          'Open3.capture2' => :waiting,
-          'Open3.capture2e' => :waiting,
-          'Open3.capture3' => :waiting,
-          'Open3.pipeline' => :waiting,
-          # Detach (info) - detaching subprocess without waiting
-          'Process.detach' => :detach,
-          # Stream (medium) - subprocess pipe/stream lifecycle
-          'IO.popen' => :stream
-        }.freeze
+        OPERATION_CATEGORY = OperationSemantics::FA1001_CATEGORIES
 
         # Per-category metadata
         CATEGORY_METADATA = {
@@ -133,7 +110,7 @@ module FiberAudit
         def build_finding(site, match)
           operation = "#{match[:constant]}.#{match[:method]}"
           context = site.execution_context || :unknown
-          category = OPERATION_CATEGORY.fetch(operation, :waiting)
+          category = OperationSemantics.resolve(operation).category
           metadata = CATEGORY_METADATA.fetch(category)
           base_severity = metadata[:severity]
           sev = advisory_severity(base_severity)

@@ -89,6 +89,26 @@ RSpec.describe FiberAudit::Runtime::JSONL::Schema do
     end
   end
 
+  it 'round-trips unknown scheduler measurements in schema 1.0' do
+    unknown_event = FiberAudit::Runtime::Event.new(
+      kind: :operation_completed,
+      source: :targeted_probe,
+      occurred_at: Time.utc(2026, 8, 2, 12, 0, 1),
+      monotonic_ns: 200,
+      operation: 'Mutex#lock',
+      measurements: { scheduler_present: nil, fiber_blocking: nil }
+    )
+
+    record = described_class.event_record(session_id: session_id, sequence: 1, event: unknown_event)
+
+    expect(described_class.validate!(record)).to equal(record)
+    expect(record.fetch('schema_version')).to eq('1.0')
+    expect(record.dig('payload', 'measurements')).to include(
+      'scheduler_present' => nil,
+      'fiber_blocking' => nil
+    )
+  end
+
   it 'builds session-end records with explicit drop accounting' do
     record = described_class.end_record(session_id: session_id, sequence: 2, summary: summary)
     expect(record['payload']['dropped']).to eq(

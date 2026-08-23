@@ -1,728 +1,150 @@
 # FiberAudit Architecture
 
-## 1. Purpose
+FiberAudit audits Ruby and Rails applications for operations that may require cooperation from a Fiber scheduler. It publishes static hypotheses and bounded runtime evidence, but it does **not** prove that an application is fiber-safe and never emits an unconditional `PASS`.
 
-FiberAudit is a risk-based compatibility auditor for Ruby and Rails applications
-running in a fiber-scheduled environment, such as a Rails application served by
-Falcon.
+> **Repository status:** The static pipeline, explicit runtime probes, Rails execution context, truthful nullable scheduler snapshots, scheduler watchdog, operation-liveness monitor, shared operation semantics, and scalar scheduler classification are implemented. Combined static/runtime reporting remains future work.
 
-It is designed to answer:
+The gem installation requirement is Ruby `>= 3.3`. The tested platform contract is CRuby 3.3, 3.4, and 4.0 on Ubuntu Linux. Other engines and operating systems are not currently tested, and native Rubydex package availability remains a platform prerequisite.
 
-1. Which operations may block a scheduler thread?
-2. Where do those operations occur?
-3. Do they appear in request, middleware, callback, job, WebSocket, boot, or
-   other execution contexts?
-4. How strong is the evidence for each finding?
-5. What should an application owner review or remediate?
-
-FiberAudit does **not** prove that an application is fiber-safe. Static analysis
-produces hypotheses, while observational runtime sessions provide bounded evidence
-without establishing complete coverage. FiberAudit never claims unconditional
-`PASS`.
-
-> **Repository status:** v0.3.0 includes the static pipeline end to end,
-> observational runtime probes, propagated Rails execution context,
-> scheduler-capability snapshots, and bounded operation/stall overlap events.
-> Combined static/runtime reporting remains future work.
-
-## 2. Scope
-
-### v0.1.0
-
-The v0.1.0 architecture is static-only:
-
-- inspect Ruby source with Rubydex and Prism;
-- identify high-signal operations that may block or misuse thread-local state;
-- classify findings by execution context where possible;
-- attach severity, confidence, evidence, remediation, and a stable fingerprint;
-- apply inline and YAML suppressions;
-- emit text and versioned JSON reports;
-- return CI-friendly exit codes.
-
-### Explicitly outside v0.1.0
-
-The following belong to later releases:
-
-- runtime instrumentation and scheduler watchdogs;
-- Rails Railties and middleware;
-- Falcon process orchestration;
-- static/runtime correlation beyond stable fingerprint generation;
-- dependency compatibility intelligence;
-- SARIF and HTML reporters;
-- runtime-backed `PASS` certification.
-
-## 3. Sources of Truth
-
-Current code and specs define implementation truth. This document records the
-supported architecture and dependency boundaries; README and CHANGELOG record
-the user-facing release contract.
-
-The platform target is Ruby `>= 3.3` with CI configured for Ruby 3.3, 3.4,
-and 4.0. Ruby 3.2 is excluded because it is end-of-life.
-
-## 4. Architectural Principles
-
-### 4.1 FiberAudit owns its public contracts
-
-Rubydex and Prism are implementation dependencies. Their objects must not leak
-into rules, findings, suppressions, or reporters. Adapters translate external
-library data into FiberAudit-owned value objects.
-
-### 4.2 Severity and confidence are separate
-
-- **Severity** represents impact if the finding is real.
-- **Confidence** represents the strength of the evidence.
-
-A high-impact heuristic can therefore be `severity: :high` and
-`confidence: :low` without conflating the two dimensions.
-
-### 4.3 Findings are the integration boundary
-
-Static rules—and future runtime correlation—use the same `Finding` model.
-Suppressions, status derivation, reporters, and future correlation operate on
-findings rather than AST or semantic-index objects.
-
-### 4.4 Analysis degrades gracefully
-
-An unresolved constant, unknown execution context, or unsupported Rubydex query
-should lower confidence or produce explicit gap metadata. It should not crash an
-entire project audit unless analysis cannot continue safely.
-
-### 4.5 Suppression is post-analysis filtering
-
-Rules produce findings independently of suppression policy. The suppression
-store partitions findings into active and suppressed sets. Suppressed findings
-remain available for reporting and audit history, but do not determine the
-active result or exit status.
-
-### 4.6 Static analysis cannot grant `PASS`
-
-The strongest static-only outcomes are `NO_FINDINGS` or
-`PASS_WITH_WARNINGS`, accompanied by a static-only disclaimer. A plain `PASS`
-requires sufficient runtime coverage and is outside v0.1.0.
-
-## 5. System Context
-
-```text
-Ruby/Rails project
-  source files
-  configuration
-  suppressions
-        |
-        v
-+--------------------------+
-| FiberAudit static audit  |
-|                          |
-| Rubydex semantic data    |
-| Prism syntax data        |
-| Context classification   |
-| Static rules             |
-| Findings + suppressions  |
-+-------------+------------+
-              |
-              +--> Text report
-              +--> JSON report
-              +--> Process exit code
-```
-
-FiberAudit does not load Rails at the gem entry point. Rails-shaped semantics
-are inferred from source structure, inheritance, paths, and callbacks.
-
-## 6. Current Repository Architecture
-
-```text
-fiber-audit static
-        |
-        +-- Project + Configuration
-        +-- SemanticIndex + CallSiteExtractor
-        +-- ExecutionContextResolver
-        +-- Built-in registry (FA1001–FA1007)
-        +-- Findings + Suppression Store
-        +-- Audit::Result
-        +-- Text or JSON reporter
-        +-- Exit code 0, 1, or 2
-```
-
-### Current component status
+## Component status
 
 | Component | Responsibility | Status |
 |---|---|---|
 | Gem packaging and loader | Ruby baseline, executable, public surface | Implemented |
 | CLI and project discovery | Commands, root/config resolution, exit codes | Implemented |
 | Findings and fingerprints | Evidence-bearing values and stable identity | Implemented |
-| Configuration and suppressions | Validation and post-analysis filtering | Implemented |
-| `SemanticIndex` | Rubydex adapter | Implemented |
-| `CallSiteExtractor` | Prism traversal and conservative inference | Implemented |
-| Context resolver | Rails/request/job/etc. classification | Implemented |
-| Rule system | Registry and FA1001–FA1007 | Implemented |
-| Audit coordinator | End-to-end orchestration and status | Implemented |
-| Reporters | Text and JSON schema 1.0 | Implemented |
-| Runtime engine | Bounded sessions, watchdog, targeted operations | Implemented through Stage 5 |
+| Configuration and suppressions | Strict static/runtime validation and post-analysis filtering | Implemented |
+| Static adapters and rules | Rubydex/Prism extraction and FA1001–FA1007 | Implemented |
+| Reporters | Deterministic text and static JSON schema 1.0 | Implemented |
+| Runtime recorder and probes | Bounded JSONL 1.0 sessions and targeted operations | Implemented |
+| Scheduler watchdog | Heartbeat stalls and bounded operation overlap | Implemented |
+| Operation-liveness monitor | Independent bounded active-operation age evidence | Implemented |
+| Shared operation semantics | Static/runtime semantic profiles and scalar classification | Implemented |
+| Combined reporting | Correlated static/runtime finding presentation | Future work |
 
-The public loader is `lib/fiber_audit.rb`.
-
-## 7. v0.1.0 Static Pipeline
-
-The pipeline below is implemented and covered by unit, fixture, CLI, and golden
-report tests.
-
-```text
-CLI / Project discovery
-        |
-        v
-Configuration + source glob expansion
-        |
-        +----------------------+
-        |                      |
-        v                      v
-Rubydex SemanticIndex    Prism CallSiteExtractor
-(project-wide meaning)   (local syntax and calls)
-        |                      |
-        +----------+-----------+
-                   |
-                   v
-         ExecutionContextResolver
-                   |
-                   v
-        Enabled rules FA1001–FA1007
-                   |
-                   v
-              Findings
-                   |
-                   v
-       Inline/YAML Suppression Store
-                   |
-          +--------+---------+
-          |                  |
-          v                  v
-    Active findings    Suppressed findings
-          |                  |
-          +--------+---------+
-                   |
-                   v
-              Audit::Result
-                   |
-          +--------+---------+
-          |                  |
-          v                  v
-     Text reporter      JSON reporter
-          |                  |
-          +--------+---------+
-                   |
-                   v
-              Exit status
-```
-
-### Pipeline behavior
-
-1. Detect the project root and configuration file.
-2. Validate configuration before analysis starts.
-3. Expand included Ruby files and remove excluded paths.
-4. Build the Rubydex semantic index once for the workspace.
-5. Parse each selected source file once with Prism.
-6. Convert call nodes into FiberAudit-owned `CallSite` values.
-7. Resolve receivers and execution contexts on a best-effort basis.
-8. Run enabled rules over call sites.
-9. Publish evidence-bearing findings to a collection.
-10. Parse and apply inline and YAML suppressions.
-11. Derive the project status from active findings.
-12. Render the selected format and return the configured exit status.
-
-## 8. Component Boundaries
-
-### 8.1 CLI and project discovery
-
-**Current files**
-
-- `lib/fiber_audit/cli.rb`
-- `lib/fiber_audit/project.rb`
-
-Responsibilities:
-
-- parse commands and flags;
-- discover the project root;
-- locate `.fiber-audit.yml` or honor `--config`;
-- invoke `Audit`;
-- select a reporter;
-- map results and errors to process exit codes.
-
-The CLI must not contain AST traversal, rule matching, or report assembly logic.
-
-### 8.2 Configuration
-
-**Current file:** `lib/fiber_audit/configuration.rb`
-
-Recognized static configuration shape:
+## Configuration boundary
 
 ```yaml
-static:
-  include:
-    - app/**/*.rb
-    - lib/**/*.rb
-    - config/**/*.rb
-  exclude:
-    - vendor/**/*
-    - tmp/**/*
-    - db/schema.rb
-  suppressions_path: .fiber-audit-suppressions.yml
-
-rules:
-  FA1001:
+runtime:
+  redaction:
+    mode: strict
+  sampling:
+    rate: 0.1
+  overhead:
+    max_events_per_second: 100
+    max_events_per_session: 10000
+    max_record_bytes: 16384
+    max_session_bytes: 10485760
+  watchdog:
     enabled: true
-    severity: high
-
-report:
-  formats:
-    - text
-    - json
-  min_severity: low
+    heartbeat_interval_ms: 25
+    stall_threshold_ms: 100
+    max_frames: 20
+  operation_liveness:
+    enabled: true
+    poll_interval_ms: 100
+    long_active_threshold_ms: 1000
+  fail_open: true
 ```
 
-The configuration boundary owns defaults, type validation, allowed formats,
-severity coercion, and rule overrides. Configuration failures must become a
-FiberAudit configuration error so the CLI can consistently exit with code 2.
+Runtime policy, watchdog policy, and operation-liveness policy are immutable FiberAudit-owned values. CLI activation transports watchdog and liveness policy in separate, exact-key, size-bounded JSON environment values. Missing transport keeps programmatic boot inert; explicit CLI runtime activation transports the configured policies and enables probes.
 
-### 8.3 Semantic indexing
-
-**Current file:** `lib/fiber_audit/static/semantic_index.rb`
-
-Rubydex supplies project-wide information:
-
-- declarations;
-- constant resolution;
-- ancestry and descendants;
-- constant references;
-- source locations.
-
-`SemanticIndex` is the only component that should directly depend on
-`Rubydex::Graph`. It normalizes workspace paths and coordinates and returns
-FiberAudit-owned values:
-
-- `Declaration`
-- `Reference`
-- `Constant`
-- `RubydexGap`
-
-Known adapter limitations are exposed as `RubydexGap` values and documented by
-the Rubydex spike fixtures.
-
-### 8.4 Syntax and call-site extraction
-
-**Current files:**
-
-- `lib/fiber_audit/static/call_site.rb`
-- `lib/fiber_audit/static/call_site_extractor.rb`
-
-Prism supplies syntax-level information that Rubydex does not reliably expose,
-including method names, receiver source, arguments, lexical nesting, and
-precise call-site locations.
-
-The target `CallSite` contract contains:
-
-```text
-path, line, column
-receiver_source, receiver_constant, method_name
-arguments, enclosing_symbol, nesting
-execution_context, resolution, confidence
-```
-
-The extractor parses each file once and performs conservative receiver
-inference. The obsolete `SourceIndex` placeholder has been removed.
-
-### 8.5 Execution-context resolution
-
-**Current files:**
-
-- `lib/fiber_audit/execution_context.rb`
-- `lib/fiber_audit/static/execution_context_resolver.rb`
-
-Supported contexts are planned as:
-
-```text
-request, middleware, callback, view, job, websocket,
-boot, console, rake_task, test, unknown
-```
-
-Resolution order:
-
-1. semantic inheritance;
-2. path-based fallback;
-3. callback/DSL syntax hints;
-4. `unknown`.
-
-The resolver must never invent certainty. Unknown or heuristic contexts remain
-explicit and can lower confidence.
-
-### 8.6 Static rule system
-
-**Current files:** `lib/fiber_audit/static/rules/`
-
-Rules consume FiberAudit `CallSite` values and emit `Finding` values. They do
-not parse files and do not access Rubydex directly.
-
-Shipped rules:
+## Static rules
 
 | ID | Concern | Default severity |
 |---|---|---:|
 | FA1001 | Subprocess lifecycle and process-wait cooperation | info/medium |
 | FA1002 | Thread-wait scheduler coordination | low |
 | FA1003 | Synchronization scheduler coordination | low/info |
-| FA1004 | True Thread variables shared across sibling Fibers | high |
+| FA1004 | True Thread-variable access shared across Fibers | medium |
 | FA1005 | `IO.select` scheduler capability requirement | medium |
-| FA1006 | Socket/DNS/I/O scheduler cooperation | low |
+| FA1006 | Socket allocation and constructor endpoint semantics | low |
 | FA1007 | HTTP scheduler cooperation in request-like contexts | medium |
 
-A rule registry owns registration, enumeration, configuration enablement, and
-metadata used by `list-rules` and `explain`.
+FA1004 uses advisory medium severity because API/context evidence does not prove request-sensitive leakage. It never publishes thread-variable keys or values. FA1006 resolves shared constructor profiles but preserves rule ID and operation strings, so existing fingerprints remain stable.
 
-### 8.7 Findings and fingerprints
+## Runtime architecture
 
-**Current files:**
-
-- `lib/fiber_audit/findings/location.rb`
-- `lib/fiber_audit/findings/evidence.rb`
-- `lib/fiber_audit/findings/finding.rb`
-- `lib/fiber_audit/findings/collection.rb`
-- `lib/fiber_audit/findings/severity.rb`
-- `lib/fiber_audit/findings/confidence.rb`
-- `lib/fiber_audit/correlation/fingerprint.rb`
-
-Severity order:
+Runtime instrumentation is activated only by the explicit runtime command:
 
 ```text
-critical > high > medium > low > info
+CLI runtime command
+  -> strict Environment settings
+  -> conditional RUBYOPT boot
+  -> one Lifecycle per process
+       -> owner-only Recorder / JSONL 1.0 session
+       -> ActiveOperations registry
+       -> targeted probe registry
+       -> optional Rails integration
+       -> scheduler Watchdog
+       -> OperationLivenessMonitor
 ```
 
-Confidence order:
+Requiring `fiber_audit` or `fiber_audit/runtime/boot` without the activation marker starts no probes, fibers, threads, or file output. The top-level loader does not require Rails.
+
+### Targeted observations and shared semantics
+
+Narrow idempotent prepend wrappers observe only canonical operations represented by FA1001–FA1007. `OperationSemantics` owns category, wait possibility, inventory-only status, and an optional relevant scheduler capability. Static rules and runtime classification consume the same immutable profiles.
+
+`SchedulerEvidenceClassifier` adds only Boolean/nil measurements:
 
 ```text
-confirmed > high > medium > low > unknown
+operation_wait_possible
+operation_inventory_only
+operation_scheduler_capability_required
+operation_scheduler_capability_supported
+operation_scheduler_cooperation_available
 ```
 
-A finding carries:
+No semantic category Symbol/String or nested classifier value enters JSONL 1.0. A true availability measurement means only that scheduler/Fiber evidence was compatible and, for an optional capability, the captured hook was supported. Required `block` and `kernel_sleep` capabilities are inferred from known scheduler presence rather than measured separately. This does not prove cooperation, progress, safety, or absence of scheduler harm.
+
+Scheduler snapshots preserve actual `Fiber#blocking?` values. Capture failure produces an all-unknown snapshot; readers must preserve nil rather than coerce it to false. Snapshot and classifier fields are additive scalar measurements under the unchanged JSONL schema 1.0 envelope.
+
+### Scheduler watchdog
+
+A scheduler-owned heartbeat reports monotonic progress. The process-local watchdog detects exclusive threshold crossings and emits bounded control events: explicit disabled/absent/active/unsupported state, one stall start/completion pair, safe project-relative frames, and bounded active-operation overlap. Overlap proves only co-occurrence on one Thread. Native work retaining the GVL can prevent both the heartbeat and watchdog Thread from running, so absence of a stall is not certification.
+
+### Operation-liveness monitor
+
+The lifecycle-owned `OperationLivenessMonitor` is independent of watchdog state. It polls an atomic bounded `ActiveOperations::Snapshot` every 100 ms by default and starts evidence when age is strictly greater than the default 1-second threshold. At most ten new threshold crossings emit per poll; both registry and per-poll truncation remain explicit. Operations outside the bounded snapshot may be unobserved, so absence of long-active events is never a complete-coverage claim.
+
+Each observed crossing emits an unsampled-but-budgeted `operation_long_active_started/completed` pair. Registry disappearance closes with `operation_finished: true`; shutdown closes with false. The latter does not claim application failure. Long-active duration is not a scheduler stall, deadlock, or causal diagnosis. Active, disabled, and unsupported state events make monitor coverage explicit.
+
+### Bounds, privacy, and lifecycle
+
+Targeted operations register before ordinary event sampling so watchdog and liveness evidence can observe sampled-out work. Control evidence bypasses random sampling but remains subject to rate, event, record-size, and session-size limits. Drops, truncation, internal errors, unsupported state, and incomplete sessions remain visible.
+
+Runtime values are allowlisted at capture time. Commands and arguments, URLs, addresses, hosts, ports, headers, bodies, payloads, return values, exception messages, environment secrets, and thread-variable keys/values are never retained. Only project-relative locations or explicit unknown/external sentinels are published.
+
+Shutdown deactivates Rails integration and probes before stopping the liveness monitor, then deactivates scheduler observation/stops the watchdog, and closes the recorder last. This prevents new registrations while open liveness pairs are closed. Fork rebinding closes only the inherited writer, discards inherited observer references without touching their locks or Threads, resets Fiber context, and constructs a new process-local session and observers.
+
+A successful `exec` may intentionally leave a valid incomplete session without `session_end`. Every reader must validate records with `Runtime::JSONL::Schema` and separately enforce stream ordering/session consistency.
+
+### Verification and performance
+
+`script/scheduler-semantics` behaviorally checks only capabilities consumed by FiberAudit: Process wait variants, coordination hooks, IO.select, localhost address resolution, storage semantics, scheduler replacement, and Ruby 4 IO-close interruption. Every case and the RSpec subprocess are bounded.
+
+`benchmark/runtime_probe_overhead.rb` runs absent, installed/inactive, active sampling-zero, and active sampling-one scenarios in isolated subprocesses. It reports timing and recorder accounting for local diagnosis. There is no CI wall-clock threshold; optimization requires benchmark evidence.
+
+Remaining runtime work is combined static/runtime correlation and any separately approved coverage contract that could support stronger status semantics.
+
+## Repository map
 
 ```text
-rule identity and title
-category
-severity and confidence
-location and enclosing symbol
-resolved operation and execution context
-message, evidence, and remediation
-stable fingerprint
+bin/fiber-audit                                          executable
+lib/fiber_audit.rb                                      public loader
+lib/fiber_audit/cli.rb                                  command and exit-code boundary
+lib/fiber_audit/configuration.rb                        validated configuration
+lib/fiber_audit/operation_semantics.rb                  shared operation profiles
+lib/fiber_audit/static/                                 static extraction/context/rules
+lib/fiber_audit/runtime/                                runtime values, lifecycle, watchdog, probes
+lib/fiber_audit/runtime/scheduler_evidence_classifier.rb scalar runtime interpretation
+lib/fiber_audit/runtime/operation_liveness_policy.rb    strict monitor policy
+lib/fiber_audit/runtime/operation_liveness_monitor.rb   bounded operation-age evidence
+script/scheduler-semantics                              used-capability behavior contract
+benchmark/runtime_probe_overhead.rb                     local measurement-only benchmark
 ```
 
-The fingerprint is SHA-256 over:
+## Maintenance
 
-```text
-rule_id : normalized_path : enclosing_symbol : operation
-```
-
-Line number is intentionally excluded so a finding remains stable when nearby
-source lines move.
-
-`Finding.new` currently permits empty evidence while a finding is assembled.
-Publication through a collection is intended to require at least one evidence
-entry. Constructor and publication paths must enforce the same final invariant.
-
-### 8.8 Suppressions
-
-**Current files:**
-
-- `lib/fiber_audit/suppressions/parser.rb`
-- `lib/fiber_audit/suppressions/store.rb`
-
-Inline form:
-
-```ruby
-# fiber-audit:disable FA1001 -- executed only by an offline migration
-Open3.capture3(command)
-# fiber-audit:enable FA1001
-```
-
-YAML form:
-
-```yaml
-suppressions:
-  - rule: FA1001
-    symbol: DataMigration#run
-    reason: Executed only by an offline task
-```
-
-Every suppression requires a reason. Inline directives must come from actual
-Ruby comments; directive-looking text in strings, heredocs, or regular
-expressions is not a directive. Both disable and enable matching must use
-comment locations rather than unrestricted line scans.
-
-### 8.9 Audit coordinator
-
-**Current file:** `lib/fiber_audit/audit.rb`
-
-The coordinator owns pipeline sequencing, not component internals. Its result
-must contain enough information for all reporters:
-
-- active findings;
-- suppressed findings;
-- parse/analysis errors;
-- derived status;
-- static-only disclaimer and coverage metadata.
-
-### 8.10 Reporters
-
-**Current files:** `lib/fiber_audit/reporters/`
-
-Reporters consume `Audit::Result`; they do not rerun analysis or apply
-suppressions.
-
-- Text output is optimized for humans and CI logs.
-- JSON output is a versioned external contract.
-- The planned initial JSON schema version is `1.0`.
-
-`Finding#to_h_for_json` is currently an internal serialization helper. It does
-not by itself constitute the complete versioned report schema.
-
-## 9. Dependency Direction
-
-The desired dependency direction is inward toward FiberAudit-owned contracts:
-
-```text
-CLI / Reporters
-       |
-       v
-Audit coordinator
-       |
-       +--> Suppression Store
-       +--> Rule Registry
-                 |
-                 v
-              CallSite
-                 ^
-                 |
-      Context Resolver / Extractor
-          ^                 ^
-          |                 |
-     SemanticIndex      Prism syntax
-          |
-     Rubydex graph
-
-Rules --------------------------> Finding
-Suppressions / Reporters -------> Finding
-Finding ------------------------> Fingerprint, Location, Evidence
-```
-
-Forbidden dependencies:
-
-- rules must not depend on Rubydex or Prism node classes;
-- reporters must not depend on indexes or rules;
-- suppressions must not mutate rule behavior;
-- the top-level gem loader must not require Rails;
-- v0.1.0 code must not depend on runtime instrumentation modules.
-
-## 10. Status and Exit Contracts
-
-### Planned project statuses
-
-| Status | Meaning |
-|---|---|
-| `FAIL` | At least one active critical or high finding |
-| `REVIEW` | Medium risk, or unresolved low/unknown-confidence risk requiring review |
-| `PASS_WITH_WARNINGS` | Only low or informational findings |
-| `NO_FINDINGS` | No active findings |
-
-Every v0.1.0 report must include:
-
-> This is a static-only audit. PASS cannot be granted without runtime coverage.
-
-### Exit codes
-
-| Code | Meaning |
-|---:|---|
-| 0 | No active finding at or above the configured threshold |
-| 1 | At least one active finding at or above the threshold |
-| 2 | Configuration or analysis error |
-| 3 | Reserved; not emitted in v0.1.0 |
-
-The `static` command implements these result and exit-code semantics. Source
-parse errors remain report data so analysis can continue on other files.
-
-## 11. Error Handling
-
-Errors should be split into two classes of behavior:
-
-- **Recoverable analysis gaps:** record an error/gap, lower confidence, and
-  continue with other files or references.
-- **Invalid invocation or configuration:** raise a FiberAudit-owned error and
-  let the CLI return exit code 2.
-
-External exceptions should be translated at their adapter boundary. Downstream
-components should not need to rescue Rubydex-, Prism-, or YAML-specific errors.
-
-Shared error-class placement remains an R1 design decision; the remediation
-plan recommends a dedicated `lib/fiber_audit/errors.rb`.
-
-## 12. Testing Architecture
-
-Tests mirror `lib/` under `spec/`.
-
-### Current coverage
-
-The suite covers value objects, semantic adaptation, call-site extraction,
-context resolution, all built-in rules, configuration, suppressions, project
-discovery, orchestration, reporters, CLI exit paths, and a versioned golden
-report.
-
-### v0.1.0 coverage
-
-- exact `CallSite` extraction and receiver inference;
-- execution-context classification;
-- positive and negative fixtures for every rule;
-- shadowed-constant negatives to avoid name-only false positives;
-- stable fingerprints across repeated analysis;
-- suppression behavior, including comment-only enable/disable directives;
-- project-root and configuration discovery;
-- text and JSON reporter contracts;
-- golden JSON output;
-- clean, findings, and invalid-config CLI exit paths.
-
-Fixture applications should remain small and deterministic:
-
-```text
-spec/fixtures/apps/poro_clean
-spec/fixtures/apps/rails_blockers
-spec/fixtures/apps/rails_contexts
-spec/fixtures/reports/rails_blockers_v0.1.json
-```
-
-CI is configured to run linting, specs, and gem packaging on Ruby 3.3, 3.4,
-and 4.0.
-The workflow configuration does not itself prove that remote CI has passed.
-
-## 13. Runtime Architecture Beyond v0.1.0
-
-The long-term architecture adds a runtime branch alongside static analysis:
-
-```text
-Static engine                   Runtime session
-Rubydex + Prism                 Instrumentation + watchdog
-      |                                  |
-      v                                  v
-Static findings                   Runtime events
-      |                                  |
-      +---------------+------------------+
-                      |
-                      v
-             Fingerprint correlation
-                      |
-                      v
-       Confirmed / static-only / runtime-only findings
-```
-
-The foundational runtime contracts and recorder are implemented under
-`lib/fiber_audit/runtime/`: immutable event/session values, strict redaction and
-resource policy, injected clocks and sampling, bounded JSONL writing, explicit
-drop accounting, and crash-tolerant session recording. The explicit `runtime`
-command supervises a user-supplied command, injects a conditional Ruby boot,
-forwards signals, preserves child status, and creates a distinct session for each
-observed Ruby process.
-
-Explicit runtime boot also installs a narrow observer for schedulers configured
-through `Fiber.set_scheduler`. A scheduler-owned heartbeat fiber updates
-monotonic progress; one process-local watchdog thread detects threshold crossings.
-Each stall emits at most one start and one completion event plus a configured,
-bounded set of project-relative frame events. An active-operation registry uses
-only ephemeral thread/fiber identities and process-local sequences so targeted
-operations can overlap scheduler stalls without retaining arguments or request
-identifiers.
-
-Watchdog state is explicit: disabled, absent, active, or unsupported. State and
-stall events bypass random sampling but still consume all recorder rate, event,
-record, and session limits. Runtime JSONL schema `1.0` and its `session_start`
-contract remain unchanged; watchdog policy travels only in strict activation
-settings, while state and policy measurements are ordinary bounded events.
-Explicit boot installs narrow, idempotent `Module#prepend` wrappers for the
-operations represented by FA1001–FA1007. One shared probe base owns monotonic
-timing, sampled completion/abortion events, conservative direct project
-callsites, recursion protection, and active-operation registration. Probe events
-retain only canonical operations, duration, project-relative location,
-ephemeral identities, operation sequence, and a small fixed set of Booleans.
-Commands, URLs, addresses, ports, headers, payloads, return data, exception data,
-and thread-local keys or values are never retained.
-
-A process-local registry deactivates wrappers without attempting to remove Ruby
-prepends. A narrow `Kernel#require` wrapper rescans only known standard-library
-targets after successful loads; no unrestricted tracing, `load`, `const_missing`,
-or autoload observation is used. Unknown ownership is skipped rather than mapped
-to a project callsite.
-
-Stage 5 adds `source: targeted_probe` and the event kinds `operation_started`,
-`operation_completed`, and `operation_aborted`. These values use existing bounded
-identifier fields and are backward-compatible additions to runtime JSONL schema
-`1.0`; the envelope, payload keys, and original golden fixture remain unchanged.
-
-Shutdown first deactivates probes, then makes scheduler callbacks inert, requests
-heartbeat/watchdog stop, bounds and joins the watchdog thread, completes any open
-stall, and only then closes the recorder. Fork rebinding discards inherited probe
-and watchdog references before touching their locks and creates process-local
-replacements.
-
-Rails execution context detection uses a bounded immutable frame chain in Ruby
-Fiber storage. Child Fibers inherit the current logical context snapshot, while
-child overrides and `clear!` remain local to that Fiber. Frames carry PID and
-Thread ownership, validate against `Context::ALL`, enforce `MAX_DEPTH = 32`, and
-reset on fork. A process-local `RailsIntegration` class hooks into Rails boundaries
-via `Module#prepend`: Rack middleware (`:middleware`), `ActionController::Metal#process_action`
-(`:request`), `ActiveJob::Base#perform_now` (`:job`), and `ActionCable::Channel::Base#dispatch_action`
-(`:websocket`). Wrappers consult the active integration before setting context and become
-inert after deactivation or fork, preserving application semantics. The integration
-supports late loading: hooks are installed when Rails components become available,
-even after runtime boot. Probe observations snapshot the context once at start and
-propagate it through active operations and events. Lifecycle wires context store and
-Rails integration ownership, shutdown deactivates Rails integration before probes,
-and fork rebinding resets context and rebuilds integration. JSONL schema 1.0 and
-privacy requirements are preserved; no new schema fields are added. Runtime
-operation events also record scheduler presence, blocking-Fiber state, and
-optional hook support. Watchdog stalls emit bounded
-`scheduler_stall_operation_overlap` events for operations active on the same
-Thread. These events establish temporal overlap, not causality.
-
-Loading the gem normally performs no instrumentation, fibers, threads, or file
-I/O. The observer is activated only by explicit runtime boot. A native operation
-that retains Ruby's GVL can prevent the watchdog thread from running until the
-operation returns; absence or unsupported monitoring and absence of stalls are
-never clean certification.
-
-Remaining runtime concepts include:
-
-- static/runtime evidence merging;
-- runtime coverage sufficient to support future `PASS` semantics.
-
-Runtime components must continue to emit or enrich the common finding model
-rather than establish a parallel reporting model.
-
-## 14. Repository Map
-
-```text
-lib/fiber_audit.rb                         public loader
-lib/fiber_audit/cli.rb                     command and exit-code boundary
-lib/fiber_audit/project.rb                 root/config discovery
-lib/fiber_audit/audit.rb                   static coordinator
-lib/fiber_audit/configuration.rb           validated static configuration
-lib/fiber_audit/findings/                  public result values
-lib/fiber_audit/correlation/fingerprint.rb stable identity
-lib/fiber_audit/suppressions/              suppression parsing and filtering
-lib/fiber_audit/static/                    semantic, call-site, context, rules
-lib/fiber_audit/reporters/                 text and JSON schema 1.0
-lib/fiber_audit/runtime/                    values, lifecycle, watchdog, probes
-ARCHITECTURE.md                             supported architecture and boundaries
-```
-
-## 15. Maintaining This Document
-
-Update this document when the supported architecture changes:
-
-1. Describe components as implemented only when source and meaningful specs
-   exist.
-2. Update diagrams when dependency direction changes.
-3. Record external report-schema changes as versioned contract changes.
-4. Keep future runtime architecture separate from current static behavior.
-6. Never use the existence of a built gem artifact as evidence that a release or
-   architecture stage is complete.
+Update this document when supported architecture changes. Describe features as implemented only after source and meaningful specs exist, record external schema changes as versioned contracts, and keep future work distinct from shipped behavior.

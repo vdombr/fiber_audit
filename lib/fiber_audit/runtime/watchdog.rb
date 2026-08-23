@@ -6,6 +6,7 @@ require_relative 'event'
 require_relative 'heartbeat'
 require_relative 'recorder'
 require_relative 'redactor'
+require_relative 'scheduler_evidence_classifier'
 require_relative 'watchdog_policy'
 
 module FiberAudit
@@ -260,6 +261,7 @@ module FiberAudit
         start_stall(channel, snapshot, age_ns, now_ns) if policy.stalled?(age_ns: age_ns)
       end
 
+      # rubocop:disable Metrics/AbcSize
       def start_stall(channel, snapshot, age_ns, now_ns)
         @stall_sequence += 1
         channel.stall = Stall.new(
@@ -267,7 +269,8 @@ module FiberAudit
           progress_sequence: snapshot.sequence,
           began_monotonic_ns: snapshot.last_progress_ns
         )
-        operations = active_operations.snapshot(thread_id: snapshot.thread_id)
+        operation_snapshot = active_operations.snapshot_with_metadata(thread_id: snapshot.thread_id)
+        operations = operation_snapshot.entries
         frames = safe_frames(channel.thread)
         measurements = {
           stall_sequence: @stall_sequence,
@@ -276,7 +279,8 @@ module FiberAudit
           stall_threshold_ns: policy.stall_threshold_ns,
           heartbeat_interval_ns: policy.heartbeat_interval_ns,
           frame_count: frames.size,
-          active_operation_count: operations.size,
+          active_operation_count: operation_snapshot.total_count,
+          active_operation_snapshot_truncated: operation_snapshot.truncated?,
           active_operation_first_sequence: operations.first&.sequence,
           active_operation_last_sequence: operations.last&.sequence
         }
@@ -297,17 +301,16 @@ module FiberAudit
             measurements: { stall_sequence: @stall_sequence, frame_index: index }
           )
         end
-        emit_stall_operation_overlap_events(operations, now_ns, snapshot)
+        emit_stall_operation_overlap_events(operations, operation_snapshot.total_count, now_ns)
       end
+      # rubocop:enable Metrics/AbcSize
 
-      def emit_stall_operation_overlap_events(operations, now_ns, _snapshot)
+      def emit_stall_operation_overlap_events(operations, total_count, now_ns)
         return if operations.empty?
 
-        truncated = operations.size > MAX_OVERLAP_EVENTS
         bounded_operations = operations.first(MAX_OVERLAP_EVENTS)
-
+        truncated = total_count > bounded_operations.size
         bounded_operations.each do |entry|
-          overlap_measurements = build_overlap_measurements(entry, truncated, operations.size)
           emit_event(
             kind: :scheduler_stall_operation_overlap,
             monotonic_ns: now_ns,
@@ -316,7 +319,7 @@ module FiberAudit
             execution_context: entry.execution_context,
             thread_id: entry.thread_id,
             fiber_id: entry.fiber_id,
-            measurements: overlap_measurements
+            measurements: build_overlap_measurements(entry, truncated, total_count)
           )
         end
       rescue StandardError => e
@@ -334,7 +337,12 @@ module FiberAudit
         }
 
         measurements.merge!(entry.scheduler_snapshot.to_measurements) if entry.scheduler_snapshot
-
+        measurements.merge!(
+          SchedulerEvidenceClassifier.measurements(
+            operation: entry.operation,
+            scheduler_snapshot: entry.scheduler_snapshot
+          )
+        )
         measurements
       end
 

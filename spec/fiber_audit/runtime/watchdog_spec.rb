@@ -355,6 +355,76 @@ RSpec.describe FiberAudit::Runtime::Watchdog do
       recorder.close
     end
 
+    it 'uses atomic pre-truncation operation totals for stalls and bounded overlap events' do
+      watchdog, recorder, operations, io, set_now = build_runtime(
+        watchdog_values: { heartbeat_interval_ms: 25, stall_threshold_ms: 100, max_frames: 0 }
+      )
+      set_now.call(10)
+      heartbeat = attach_heartbeat(watchdog)
+      105.times do |index|
+        operations.register(
+          operation: 'Mutex#lock',
+          location: FiberAudit::Runtime::Location.new(path: 'app/task.rb', line: index + 1),
+          execution_context: :job,
+          monotonic_ns: 20 + index
+        )
+      end
+
+      watchdog.poll(now_ns: 100_000_011)
+      payloads = event_payloads(io)
+      stall = payloads.find { |payload| payload['kind'] == 'scheduler_stall_started' }
+      overlaps = payloads.select { |payload| payload['kind'] == 'scheduler_stall_operation_overlap' }
+
+      expect(stall.fetch('measurements')).to include(
+        'active_operation_count' => 105,
+        'active_operation_snapshot_truncated' => true
+      )
+      expect(overlaps.size).to eq(10)
+      expect(overlaps).to all(satisfy do |payload|
+        payload.dig('measurements', 'overlap_total_count') == 105 &&
+          payload.dig('measurements', 'overlap_truncated') == true
+      end)
+    ensure
+      watchdog&.stop
+      heartbeat&.resume if heartbeat&.alive?
+      recorder&.close unless recorder&.closed?
+    end
+
+    it 'classifies scheduler capability evidence on operation overlap events' do
+      watchdog, recorder, operations, io, set_now = build_runtime(
+        watchdog_values: { heartbeat_interval_ms: 25, stall_threshold_ms: 100, max_frames: 0 }
+      )
+      set_now.call(10)
+      heartbeat = attach_heartbeat(watchdog)
+      snapshot = FiberAudit::Runtime::SchedulerSnapshot.new(
+        scheduler_present: true,
+        fiber_blocking: false,
+        scheduler_io_select_supported: false
+      )
+      operations.register(
+        operation: 'IO.select',
+        location: FiberAudit::Runtime::Location.new(path: 'app/io.rb', line: 5),
+        execution_context: :request,
+        monotonic_ns: 20,
+        scheduler_snapshot: snapshot
+      )
+
+      watchdog.poll(now_ns: 100_000_011)
+      overlap = event_payloads(io).find { |payload| payload['kind'] == 'scheduler_stall_operation_overlap' }
+
+      expect(overlap.fetch('measurements')).to include(
+        'operation_wait_possible' => true,
+        'operation_inventory_only' => false,
+        'operation_scheduler_capability_required' => true,
+        'operation_scheduler_capability_supported' => false,
+        'operation_scheduler_cooperation_available' => false
+      )
+    ensure
+      watchdog&.stop
+      heartbeat&.resume if heartbeat&.alive?
+      recorder&.close unless recorder&.closed?
+    end
+
     it 'preserves aggregate stall events alongside overlap events' do
       watchdog, recorder, operations, io, set_now = build_runtime(
         watchdog_values: { heartbeat_interval_ms: 25, stall_threshold_ms: 100, max_frames: 0 }
@@ -452,6 +522,34 @@ RSpec.describe FiberAudit::Runtime::Watchdog do
       watchdog.stop
       heartbeat.resume if heartbeat.alive?
       recorder.close
+    end
+
+    it 'preserves unknown scheduler state in overlap measurements' do
+      watchdog, recorder, operations, io, set_now = build_runtime(
+        watchdog_values: { heartbeat_interval_ms: 25, stall_threshold_ms: 100, max_frames: 0 }
+      )
+      set_now.call(10)
+      heartbeat = attach_heartbeat(watchdog)
+      snapshot = FiberAudit::Runtime::SchedulerSnapshot.new(scheduler_present: nil, fiber_blocking: nil)
+      operations.register(
+        operation: 'Mutex#lock',
+        location: FiberAudit::Runtime::Location.new(path: 'app/task.rb', line: 1),
+        execution_context: :job,
+        monotonic_ns: 20,
+        scheduler_snapshot: snapshot
+      )
+
+      watchdog.poll(now_ns: 100_000_011)
+      overlap = event_payloads(io).find { |payload| payload['kind'] == 'scheduler_stall_operation_overlap' }
+
+      expect(overlap.fetch('measurements')).to include(
+        'scheduler_present' => nil,
+        'fiber_blocking' => nil
+      )
+    ensure
+      watchdog&.stop
+      heartbeat&.resume if heartbeat&.alive?
+      recorder&.close unless recorder&.closed?
     end
 
     it 'handles operations without scheduler snapshot gracefully' do

@@ -7,6 +7,14 @@ require 'fiber_audit/runtime/environment'
 RSpec.describe FiberAudit::Runtime::Environment do
   let(:launch_id) { '123e4567-e89b-42d3-a456-426614174000' }
   let(:policy) { FiberAudit::Runtime::Policy.new(sampling_rate: 0.75) }
+  let(:operation_liveness_policy) do
+    FiberAudit::Runtime::OperationLivenessPolicy.new(
+      enabled: true,
+      poll_interval_ms: 20,
+      long_active_threshold_ms: 125
+    )
+  end
+
   let(:watchdog_policy) do
     FiberAudit::Runtime::WatchdogPolicy.new(
       enabled: true,
@@ -74,6 +82,62 @@ RSpec.describe FiberAudit::Runtime::Environment do
       expect do
         described_class.load_watchdog_policy(described_class::WATCHDOG_SETTINGS_KEY => value)
       end.to raise_error(FiberAudit::RuntimeContractError)
+    end
+  end
+
+  it 'round-trips strict operation-liveness settings separately from session settings' do
+    encoded = described_class.dump_operation_liveness_policy(operation_liveness_policy)
+    loaded = described_class.load_operation_liveness_policy(
+      described_class::OPERATION_LIVENESS_SETTINGS_KEY => encoded
+    )
+    payload = JSON.parse(encoded)
+
+    expect(loaded).to eq(operation_liveness_policy)
+    expect(payload.keys).to eq(described_class::OPERATION_LIVENESS_KEYS)
+    expect(payload.to_s).not_to include('command', 'address', 'SECRET')
+    expect(encoded).to be_frozen
+    expect(described_class.load_operation_liveness_policy({}))
+      .to equal(FiberAudit::Runtime::OperationLivenessPolicy::DISABLED)
+  end
+
+  it 'rejects malformed, unknown, missing, oversized, and incompatible liveness settings' do
+    payload = JSON.parse(described_class.dump_operation_liveness_policy(operation_liveness_policy))
+    invalid = [
+      'malformed',
+      JSON.generate(payload.merge('command' => 'secret')),
+      JSON.generate(payload.except('long_active_threshold_ms')),
+      JSON.generate(payload.merge('protocol_version' => 99)),
+      'x' * (described_class::MAX_OPERATION_LIVENESS_SETTINGS_BYTES + 1)
+    ]
+
+    invalid.each do |value|
+      expect do
+        described_class.load_operation_liveness_policy(
+          described_class::OPERATION_LIVENESS_SETTINGS_KEY => value
+        )
+      end.to raise_error(FiberAudit::RuntimeContractError)
+    end
+  end
+
+  it 'includes an immutable strict liveness policy in the child environment delta' do
+    with_directories do |root, output|
+      settings = described_class.build(
+        policy: policy,
+        output_directory: output,
+        project_root: root,
+        launch_id: launch_id
+      )
+      child = described_class.child_environment(
+        settings: settings,
+        operation_liveness_policy: operation_liveness_policy,
+        probes_enabled: true,
+        base_environment: { 'SECRET' => 'do-not-copy' }
+      )
+
+      expect(described_class.load_operation_liveness_policy(child)).to eq(operation_liveness_policy)
+      expect(child).not_to have_key('SECRET')
+      expect(child.fetch(described_class::OPERATION_LIVENESS_SETTINGS_KEY)).to be_frozen
+      expect(child).to be_frozen
     end
   end
 

@@ -4,7 +4,7 @@ require 'fiber_audit/runtime/scheduler_snapshot'
 
 RSpec.describe FiberAudit::Runtime::SchedulerSnapshot do
   describe '.new' do
-    it 'creates an immutable snapshot with required boolean fields' do
+    it 'creates an immutable snapshot with required state fields' do
       snapshot = described_class.new(
         scheduler_present: true,
         fiber_blocking: false
@@ -32,16 +32,21 @@ RSpec.describe FiberAudit::Runtime::SchedulerSnapshot do
       expect(snapshot.scheduler_address_resolve_supported).to be(true)
     end
 
-    it 'rejects non-boolean scheduler_present' do
-      expect do
-        described_class.new(scheduler_present: nil, fiber_blocking: false)
-      end.to raise_error(FiberAudit::RuntimeContractError, /scheduler_present must be a Boolean/)
+    it 'accepts nil for unknown scheduler and Fiber state' do
+      snapshot = described_class.new(scheduler_present: nil, fiber_blocking: nil)
+
+      expect(snapshot.scheduler_present).to be_nil
+      expect(snapshot.fiber_blocking).to be_nil
     end
 
-    it 'rejects non-boolean fiber_blocking' do
+    it 'rejects non-boolean/non-nil required state fields' do
       expect do
-        described_class.new(scheduler_present: true, fiber_blocking: nil)
-      end.to raise_error(FiberAudit::RuntimeContractError, /fiber_blocking must be a Boolean/)
+        described_class.new(scheduler_present: 'yes', fiber_blocking: false)
+      end.to raise_error(FiberAudit::RuntimeContractError, /scheduler_present must be a Boolean or nil/)
+
+      expect do
+        described_class.new(scheduler_present: true, fiber_blocking: 1)
+      end.to raise_error(FiberAudit::RuntimeContractError, /fiber_blocking must be a Boolean or nil/)
     end
 
     it 'rejects non-boolean/non-nil optional fields' do
@@ -121,10 +126,12 @@ RSpec.describe FiberAudit::Runtime::SchedulerSnapshotCapture do
       expect(snapshot).to be_frozen
     end
 
-    it 'captures current fiber blocking state' do
-      snapshot = described_class.capture
-      # In test context, fiber is typically not blocking
-      expect([true, false]).to include(snapshot.fiber_blocking)
+    it 'captures blocking and non-blocking Fiber state exactly' do
+      blocking = Fiber.new(blocking: true) { described_class.capture.fiber_blocking }
+      non_blocking = Fiber.new(blocking: false) { described_class.capture.fiber_blocking }
+
+      expect(blocking.resume).to be(true)
+      expect(non_blocking.resume).to be(false)
     end
 
     it 'detects absence of scheduler in test context' do
@@ -169,16 +176,17 @@ RSpec.describe FiberAudit::Runtime::SchedulerSnapshotCapture do
       Fiber.set_scheduler(nil) if Fiber.scheduler
     end
 
-    it 'fails open on exception and returns safe defaults' do
-      # Temporarily break Fiber.scheduler to raise an error
+    it 'fails open with unknown state instead of false facts' do
       allow(Fiber).to receive(:scheduler).and_raise(StandardError, 'test error')
 
       snapshot = described_class.capture
-      expect(snapshot.scheduler_present).to be(false)
-      expect(snapshot.fiber_blocking).to be(false)
-      expect(snapshot.scheduler_io_select_supported).to be_nil
-      expect(snapshot.scheduler_process_wait_supported).to be_nil
-      expect(snapshot.scheduler_address_resolve_supported).to be_nil
+      expect(snapshot.to_measurements).to eq(
+        scheduler_present: nil,
+        fiber_blocking: nil,
+        scheduler_io_select_supported: nil,
+        scheduler_process_wait_supported: nil,
+        scheduler_address_resolve_supported: nil
+      )
     end
 
     it 'is deterministic for the same execution context' do

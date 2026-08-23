@@ -14,6 +14,8 @@ require_relative 'scheduler_observer'
 require_relative 'session'
 require_relative 'watchdog'
 require_relative 'watchdog_policy'
+require_relative 'operation_liveness_monitor'
+require_relative 'operation_liveness_policy'
 
 module FiberAudit
   module Runtime
@@ -21,6 +23,7 @@ module FiberAudit
     class Lifecycle
       attr_reader :settings, :owner_pid, :output_path, :recorder,
                   :watchdog, :active_operations, :watchdog_policy,
+                  :operation_liveness_monitor, :operation_liveness_policy,
                   :redactor, :probe_registry, :execution_context_store,
                   :rails_integration
 
@@ -31,6 +34,7 @@ module FiberAudit
       def initialize(
         settings:,
         watchdog_policy: nil,
+        operation_liveness_policy: nil,
         probes_enabled: false,
         clock: Clock.new,
         session_id_source: SecureRandom.method(:uuid),
@@ -39,11 +43,12 @@ module FiberAudit
         random: Sampler::RANDOM_SOURCE
       )
         validate_dependencies!(
-          settings, watchdog_policy, probes_enabled, clock,
+          settings, watchdog_policy, operation_liveness_policy, probes_enabled, clock,
           session_id_source, pid_source, writer_factory, random
         )
         @settings = settings
         @watchdog_policy = watchdog_policy
+        @operation_liveness_policy = operation_liveness_policy
         @probes_enabled = probes_enabled
         @clock = clock
         @session_id_source = session_id_source
@@ -52,15 +57,7 @@ module FiberAudit
         @random = random
         @owner_pid = current_pid
         @state = :starting
-        @output_path = nil
-        @recorder = nil
-        @watchdog = nil
-        @scheduler_observer = nil
-        @active_operations = nil
-        @redactor = nil
-        @probe_registry = nil
-        @execution_context_store = nil
-        @rails_integration = nil
+        reset_process_components!
         start_process_session!
       rescue StandardError => e
         startup_failure!(e)
@@ -84,15 +81,7 @@ module FiberAudit
 
         abandon_inherited_runtime!
         @owner_pid = pid
-        @output_path = nil
-        @recorder = nil
-        @watchdog = nil
-        @scheduler_observer = nil
-        @active_operations = nil
-        @redactor = nil
-        @probe_registry = nil
-        @execution_context_store = nil
-        @rails_integration = nil
+        reset_process_components!
         @state = :starting
         # Reset fiber-local context after fork
         ExecutionContext.reset!
@@ -122,12 +111,17 @@ module FiberAudit
 
       private
 
-      def validate_dependencies!(candidate_settings, watchdog, probes, candidate_clock, session_ids, pids, writers, random)
+      def validate_dependencies!(candidate_settings, watchdog, liveness, probes, candidate_clock,
+                                 session_ids, pids, writers, random)
         unless candidate_settings.is_a?(Environment::Settings)
           raise RuntimeContractError, 'settings must be FiberAudit::Runtime::Environment::Settings'
         end
         unless watchdog.nil? || watchdog.is_a?(WatchdogPolicy)
           raise RuntimeContractError, 'watchdog_policy must be a FiberAudit::Runtime::WatchdogPolicy or nil'
+        end
+        unless liveness.nil? || liveness.is_a?(OperationLivenessPolicy)
+          raise RuntimeContractError,
+                'operation_liveness_policy must be a FiberAudit::Runtime::OperationLivenessPolicy or nil'
         end
         raise RuntimeContractError, 'probes_enabled must be a Boolean' unless [true, false].include?(probes)
         raise RuntimeContractError, 'clock must be a FiberAudit::Runtime::Clock' unless candidate_clock.is_a?(Clock)
@@ -140,6 +134,19 @@ module FiberAudit
         }.each do |name, source|
           raise RuntimeContractError, "#{name} must respond to call" unless source.respond_to?(:call)
         end
+      end
+
+      def reset_process_components!
+        @output_path = nil
+        @recorder = nil
+        @watchdog = nil
+        @operation_liveness_monitor = nil
+        @scheduler_observer = nil
+        @active_operations = nil
+        @redactor = nil
+        @probe_registry = nil
+        @execution_context_store = nil
+        @rails_integration = nil
       end
 
       def start_process_session!
@@ -175,6 +182,7 @@ module FiberAudit
         @redactor = Redactor.new(root: settings.project_root, policy: settings.policy)
         @execution_context_store = ExecutionContext if @probes_enabled
         setup_watchdog! if watchdog_policy
+        setup_operation_liveness! if @probes_enabled && operation_liveness_policy
         setup_rails_integration! if @probes_enabled
         setup_probes! if @probes_enabled
       rescue StandardError => e
@@ -203,6 +211,13 @@ module FiberAudit
           @rails_integration = nil
         end
         begin
+          @operation_liveness_monitor&.stop
+        rescue StandardError
+          nil
+        ensure
+          @operation_liveness_monitor = nil
+        end
+        begin
           if @scheduler_observer
             SchedulerObserver.deactivate(@scheduler_observer)
             @watchdog&.stop
@@ -213,6 +228,15 @@ module FiberAudit
           @scheduler_observer = nil
           @watchdog = nil
         end
+      end
+
+      def setup_operation_liveness!
+        @operation_liveness_monitor = OperationLivenessMonitor.new(
+          policy: operation_liveness_policy,
+          recorder: recorder,
+          active_operations: active_operations,
+          clock: @clock
+        )
       end
 
       def setup_rails_integration!
@@ -272,42 +296,59 @@ module FiberAudit
       def abandon_inherited_runtime!
         recorder&.writer&.close
       ensure
-        @recorder = nil
-        @watchdog = nil
-        @scheduler_observer = nil
-        @active_operations = nil
-        @redactor = nil
-        @probe_registry = nil
-        @execution_context_store = nil
-        @rails_integration = nil
+        reset_process_components!
       end
 
       def stop_runtime_observers
         error = nil
-        begin
-          RailsIntegration.deactivate(@rails_integration) if @rails_integration
-        rescue StandardError => e
-          error ||= e
-        ensure
-          @rails_integration = nil
-        end
-        begin
-          Probes::Registry.deactivate(probe_registry) if probe_registry
-        rescue StandardError => e
-          error ||= e
-        ensure
-          @probe_registry = nil
-        end
-        begin
-          SchedulerObserver.deactivate(@scheduler_observer) if @scheduler_observer
-          watchdog&.stop
-        rescue StandardError => e
-          error ||= e
-        ensure
-          @scheduler_observer = nil
-        end
+        component_error = stop_rails_integration
+        error ||= component_error
+        component_error = stop_probe_registry
+        error ||= component_error
+        component_error = stop_operation_liveness_monitor
+        error ||= component_error
+        component_error = stop_watchdog
+        error ||= component_error
         recorder&.internal_error! if error
         error
+      end
+
+      def stop_rails_integration
+        RailsIntegration.deactivate(@rails_integration) if @rails_integration
+        nil
+      rescue StandardError => e
+        e
+      ensure
+        @rails_integration = nil
+      end
+
+      def stop_probe_registry
+        Probes::Registry.deactivate(probe_registry) if probe_registry
+        nil
+      rescue StandardError => e
+        e
+      ensure
+        @probe_registry = nil
+      end
+
+      def stop_operation_liveness_monitor
+        operation_liveness_monitor&.stop
+        nil
+      rescue StandardError => e
+        e
+      ensure
+        @operation_liveness_monitor = nil
+      end
+
+      def stop_watchdog
+        SchedulerObserver.deactivate(@scheduler_observer) if @scheduler_observer
+        watchdog&.stop
+        nil
+      rescue StandardError => e
+        e
+      ensure
+        @scheduler_observer = nil
+        @watchdog = nil
       end
 
       def startup_failure!(error)

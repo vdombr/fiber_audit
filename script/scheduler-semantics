@@ -1,15 +1,21 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
-# Reproduces the Ruby semantics on which FiberAudit's scheduler-cooperation
-# rules rely. It uses only local threads, pipes, and child processes.
+# Reproduces only Ruby semantics consumed by FiberAudit classification.
+# Cases use local threads, pipes, localhost resolution, and child processes.
 
+# rubocop:disable Metrics/ModuleLength, Naming/PredicateMethod, Metrics/AbcSize
+
+require 'io/wait'
 require 'json'
+require 'monitor'
 require 'rbconfig'
+require 'socket'
+require 'timeout'
 
 module SchedulerSemantics
-  # The method names and signatures are fixed by Ruby's scheduler protocol.
-  # rubocop:disable Naming/PredicateMethod
+  CASE_TIMEOUT_SECONDS = 3
+
   class HookProbeScheduler
     class Invoked < StandardError
       attr_reader :hook
@@ -34,14 +40,47 @@ module SchedulerSemantics
     def address_resolve(*) = raise(Invoked, :address_resolve)
     def close = nil
   end
-  # rubocop:enable Naming/PredicateMethod
+
+  class InterruptProbeScheduler
+    attr_reader :waiting, :interrupts
+
+    def initialize
+      @waiting = Queue.new
+      @interrupts = Queue.new
+    end
+
+    def fiber(&)
+      Fiber.new(blocking: false, &).tap(&:resume)
+    end
+
+    def block(*) = true
+    def unblock(*) = true
+    def kernel_sleep(*) = 0
+
+    def io_wait(*)
+      waiting << true
+      Fiber.yield
+    end
+
+    def fiber_interrupt(fiber, exception)
+      interrupts << [fiber, exception]
+      nil
+    end
+
+    def close = nil
+  end
 
   module_function
 
+  def bounded(name, &)
+    Timeout.timeout(CASE_TIMEOUT_SECONDS, &)
+  rescue Timeout::Error
+    raise "semantic case timed out: #{name}"
+  end
+
   def observe_hook
     seen = nil
-    scheduler = HookProbeScheduler.new
-    Fiber.set_scheduler(scheduler)
+    Fiber.set_scheduler(HookProbeScheduler.new)
     Fiber.schedule do
       yield
     rescue HookProbeScheduler::Invoked => e
@@ -52,15 +91,15 @@ module SchedulerSemantics
     Fiber.set_scheduler(nil) if Fiber.scheduler
   end
 
-  def thread_join
+  def thread_join(method)
     worker = Thread.new { sleep 10 }
-    observe_hook { worker.join }
+    observe_hook { worker.public_send(method) }
   ensure
     worker&.kill
     worker&.join
   end
 
-  def mutex_contention
+  def mutex_contention(method)
     mutex = Mutex.new
     locked = Queue.new
     release = Queue.new
@@ -71,7 +110,47 @@ module SchedulerSemantics
       end
     end
     locked.pop
-    observe_hook { mutex.lock }
+    observe_hook { method == :lock ? mutex.lock : mutex.synchronize { nil } }
+  ensure
+    release << true if release && release.empty?
+    holder&.join
+  end
+
+  def mutex_try_lock
+    mutex = Mutex.new
+    locked = Queue.new
+    release = Queue.new
+    holder = Thread.new do
+      mutex.synchronize do
+        locked << true
+        release.pop
+      end
+    end
+    locked.pop
+    observe_hook { mutex.try_lock }
+  ensure
+    release << true if release && release.empty?
+    holder&.join
+  end
+
+  def condition_variable_wait
+    mutex = Mutex.new
+    condition = ConditionVariable.new
+    observe_hook { mutex.synchronize { condition.wait(mutex) } }
+  end
+
+  def monitor_contention
+    monitor = Monitor.new
+    locked = Queue.new
+    release = Queue.new
+    holder = Thread.new do
+      monitor.synchronize do
+        locked << true
+        release.pop
+      end
+    end
+    locked.pop
+    observe_hook { monitor.synchronize { nil } }
   ensure
     release << true if release && release.empty?
     holder&.join
@@ -79,7 +158,6 @@ module SchedulerSemantics
 
   def io_select
     reader, writer = IO.pipe
-    # Calling IO.select is the behavior under test.
     # rubocop:disable Lint/IncompatibleIoSelectWithFiberScheduler
     observe_hook { IO.select([reader], nil, nil, 1) }
     # rubocop:enable Lint/IncompatibleIoSelectWithFiberScheduler
@@ -88,9 +166,18 @@ module SchedulerSemantics
     writer&.close
   end
 
-  def process_wait
+  def process_wait_variant(variant)
     pid = Process.spawn(RbConfig.ruby, '-e', 'sleep 10')
-    observe_hook { Process.wait(pid) }
+    observe_hook do
+      case variant
+      when :wait then Process.wait(pid)
+      when :wait2 then Process.wait2(pid)
+      when :waitpid then Process.waitpid(pid)
+      when :waitpid2 then Process.waitpid2(pid)
+      when :waitall then Process.waitall
+      when :status_wait then Process::Status.wait(pid)
+      end
+    end
   ensure
     if pid
       begin
@@ -102,20 +189,52 @@ module SchedulerSemantics
     end
   end
 
+  def address_resolution
+    observe_hook { Addrinfo.getaddrinfo('localhost', nil) }
+  end
+
+  def fiber_interrupt
+    return { supported: false, skipped: true } if RUBY_VERSION.split('.').first.to_i < 4
+
+    reader, writer = IO.pipe
+    scheduler = InterruptProbeScheduler.new
+    Fiber.set_scheduler(scheduler)
+    fiber = Fiber.schedule do
+      reader.wait_readable
+      :readable
+    rescue IOError
+      :io_error
+    end
+    Timeout.timeout(2) { scheduler.waiting.pop }
+    closer = Thread.new { reader.close }
+    interrupted_fiber, exception = Timeout.timeout(2) { scheduler.interrupts.pop }
+    result = interrupted_fiber.raise(exception)
+    closer.join
+    {
+      supported: true,
+      hook_called: interrupted_fiber.equal?(fiber),
+      exception: exception.class.name,
+      result: result
+    }
+  ensure
+    Fiber.set_scheduler(nil) if Fiber.scheduler
+    closer&.kill
+    closer&.join
+    reader&.close unless reader&.closed?
+    writer&.close
+  end
+
   def storage
     Thread.current[:fiber_audit_probe] = :parent_fiber
     Thread.current.thread_variable_set(:fiber_audit_probe, :parent_thread)
     Fiber[:fiber_audit_probe] = :inherited_storage
-
-    child = Fiber.new do
+    Fiber.new do
       {
         thread_index: Thread.current[:fiber_audit_probe],
         thread_variable: Thread.current.thread_variable_get(:fiber_audit_probe),
         fiber_storage: Fiber[:fiber_audit_probe]
       }
-    end
-
-    child.resume
+    end.resume
   ensure
     Thread.current[:fiber_audit_probe] = nil
     Thread.current.thread_variable_set(:fiber_audit_probe, nil)
@@ -131,28 +250,60 @@ module SchedulerSemantics
     rescue ArgumentError
       raised = true
     end
-
     { raised: raised, retained: Fiber.scheduler.equal?(scheduler) }
   ensure
     Fiber.set_scheduler(nil) if Fiber.scheduler
   end
 end
 
+process_wait = %i[wait wait2 waitpid waitpid2 waitall status_wait].to_h do |variant|
+  [variant, SchedulerSemantics.bounded("process_wait.#{variant}") do
+    SchedulerSemantics.process_wait_variant(variant)
+  end]
+end
 results = {
   ruby: RUBY_DESCRIPTION,
-  thread_join: SchedulerSemantics.thread_join,
-  mutex_contention: SchedulerSemantics.mutex_contention,
-  io_select: SchedulerSemantics.io_select,
-  process_wait: SchedulerSemantics.process_wait,
-  storage: SchedulerSemantics.storage,
-  rejected_scheduler_replacement: SchedulerSemantics.rejected_scheduler_replacement
+  thread_join: SchedulerSemantics.bounded(:thread_join) { SchedulerSemantics.thread_join(:join) },
+  thread_value: SchedulerSemantics.bounded(:thread_value) { SchedulerSemantics.thread_join(:value) },
+  mutex_lock: SchedulerSemantics.bounded(:mutex_lock) { SchedulerSemantics.mutex_contention(:lock) },
+  mutex_synchronize: SchedulerSemantics.bounded(:mutex_synchronize) do
+    SchedulerSemantics.mutex_contention(:synchronize)
+  end,
+  mutex_try_lock: SchedulerSemantics.bounded(:mutex_try_lock) { SchedulerSemantics.mutex_try_lock },
+  condition_variable_wait: SchedulerSemantics.bounded(:condition_variable_wait) do
+    SchedulerSemantics.condition_variable_wait
+  end,
+  monitor_synchronize: SchedulerSemantics.bounded(:monitor_synchronize) do
+    SchedulerSemantics.monitor_contention
+  end,
+  io_select: SchedulerSemantics.bounded(:io_select) { SchedulerSemantics.io_select },
+  process_wait: process_wait,
+  address_resolution: SchedulerSemantics.bounded(:address_resolution) do
+    SchedulerSemantics.address_resolution
+  end,
+  fiber_interrupt: SchedulerSemantics.bounded(:fiber_interrupt) { SchedulerSemantics.fiber_interrupt },
+  storage: SchedulerSemantics.bounded(:storage) { SchedulerSemantics.storage },
+  rejected_scheduler_replacement: SchedulerSemantics.bounded(:scheduler_replacement) do
+    SchedulerSemantics.rejected_scheduler_replacement
+  end
 }
-
+expected_interrupt = if RUBY_VERSION.split('.').first.to_i >= 4
+                       { supported: true, hook_called: true, exception: 'IOError', result: :io_error }
+                     else
+                       { supported: false, skipped: true }
+                     end
 expected = {
   thread_join: :block,
-  mutex_contention: :block,
+  thread_value: :block,
+  mutex_lock: :block,
+  mutex_synchronize: :block,
+  mutex_try_lock: nil,
+  condition_variable_wait: :kernel_sleep,
+  monitor_synchronize: :block,
   io_select: :io_select,
-  process_wait: :process_wait,
+  process_wait: process_wait.transform_values { :process_wait },
+  address_resolution: :address_resolve,
+  fiber_interrupt: expected_interrupt,
   storage: {
     thread_index: nil,
     thread_variable: :parent_thread,
@@ -160,7 +311,6 @@ expected = {
   },
   rejected_scheduler_replacement: { raised: true, retained: true }
 }
-
 failures = expected.filter_map do |name, value|
   next if results.fetch(name) == value
 
@@ -169,3 +319,5 @@ end
 
 puts JSON.pretty_generate(results)
 abort("Semantic probe failures:\n- #{failures.join("\n- ")}") unless failures.empty?
+
+# rubocop:enable Metrics/ModuleLength, Naming/PredicateMethod, Metrics/AbcSize

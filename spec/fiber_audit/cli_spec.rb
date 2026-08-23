@@ -124,8 +124,52 @@ RSpec.describe FiberAudit::CLI do
         expect(runtime_files(output).size).to eq(2)
         runtime_files(output).each do |path|
           records = File.readlines(path, chomp: true).map { |line| JSON.parse(line) }
-          expect(records.map { |record| record['record_type'] }).to eq(%w[session_start event session_end])
-          expect(records.fetch(1).dig('payload', 'kind')).to eq('watchdog_absent')
+          expect(records.map { |record| record['record_type'] }).to eq(%w[session_start event event session_end])
+          expect(records.filter_map { |record| record.dig('payload', 'kind') })
+            .to eq(%w[watchdog_absent operation_liveness_active])
+          expect(File.stat(path).mode & 0o777).to eq(0o600)
+        end
+      end
+    end
+
+    it 'passes operation-liveness configuration to the Ruby child' do
+      with_runtime_project do |root|
+        File.write(
+          File.join(root, '.fiber-audit.yml'),
+          <<~YAML
+            runtime:
+              operation_liveness:
+                enabled: false
+                poll_interval_ms: 250
+                long_active_threshold_ms: 2000
+          YAML
+        )
+        output = File.join(root, 'sessions')
+
+        expect(run_cli('runtime', '--out', output, '--', RbConfig.ruby, '-e', 'exit 0', cwd: root)).to eq(0)
+        records = File.readlines(runtime_files(output).first, chomp: true).map { |line| JSON.parse(line) }
+        disabled = records.find { |record| record.dig('payload', 'kind') == 'operation_liveness_disabled' }
+
+        expect(disabled.dig('payload', 'measurements')).to include(
+          'poll_interval_ns' => 250_000_000,
+          'long_active_threshold_ns' => 2_000_000_000
+        )
+      end
+    end
+
+    it 'records default watchdog and liveness states for each Ruby child' do
+      with_runtime_project do |root|
+        output = File.join(root, 'sessions')
+        expect(run_cli('runtime', '--out', output, '--', RbConfig.ruby, '-e', 'exit 0', cwd: root)).to eq(0)
+        expect(run_cli('runtime', '--out', output, '--', RbConfig.ruby, '-e', 'exit 7', cwd: root)).to eq(7)
+
+        expect(runtime_files(output).size).to eq(2)
+        runtime_files(output).each do |path|
+          records = File.readlines(path, chomp: true).map { |line| JSON.parse(line) }
+          expect(records.map { |record| record['record_type'] })
+            .to eq(%w[session_start event event session_end])
+          expect(records.filter_map { |record| record.dig('payload', 'kind') })
+            .to eq(%w[watchdog_absent operation_liveness_active])
           expect(File.stat(path).mode & 0o777).to eq(0o600)
         end
       end
@@ -230,14 +274,14 @@ RSpec.describe FiberAudit::CLI do
       expect(stdout.string).to include(FiberAudit::Reporters::Schema::DISCLAIMER)
     end
 
-    it 'returns one and reports all rules for the blocker fixture' do
+    it 'returns one and reports recalibrated blockers as warnings' do
       root = File.join(fixtures, 'rails_blockers')
 
       expect(run_cli('static', '--format', 'json', cwd: root)).to eq(1)
       report = JSON.parse(stdout.string)
       expect(report.fetch('findings').map { |finding| finding.fetch('rule_id') }.uniq)
-        .to eq(%w[FA1004 FA1001 FA1005 FA1007 FA1002 FA1003 FA1006])
-      expect(report.fetch('status')).to eq('FAIL')
+        .to eq(%w[FA1001 FA1004 FA1005 FA1007 FA1002 FA1003 FA1006])
+      expect(report.fetch('status')).to eq('REVIEW')
     end
 
     it 'defaults to JSON when stdout is not a TTY' do

@@ -1,22 +1,27 @@
 # FiberAudit
 
 FiberAudit audits Ruby and Rails code for operations that require cooperation
-from a Fiber scheduler. Version 0.3.0 includes static analysis and an explicit,
-observational runtime audit with scheduler-capability and stall-overlap evidence.
+from a Fiber scheduler. It provides Rubydex/Prism-backed static hypotheses and
+an explicitly activated observational runtime recorder.
 
 > **Safety disclaimer:** FiberAudit does not prove that an application is
-> fiber-safe. Static findings are hypotheses, and absence of runtime events does
-> not establish complete coverage. FiberAudit does not emit unconditional `PASS`.
+> fiber-safe. Runtime observations prove execution, not scheduler harm; temporal
+> overlap and long-active duration do not prove causality or deadlock. Absence of
+> events does not establish execution coverage. FiberAudit never emits an
+> unconditional `PASS`.
 
 ## Requirements and installation
 
-FiberAudit v0.3.0 supports Ruby 3.3, 3.4, and 4.0.
+The gem requires Ruby 3.3 or newer. CI tests CRuby 3.3, 3.4, and 4.0 on Ubuntu
+Linux. Other Ruby engines and operating systems are not currently part of the
+tested support contract. Native Rubydex packages must be available for the
+selected platform.
 
 ```sh
 gem install fiber_audit
 ```
 
-Or add it to a bundle and run `bundle install`:
+Or add it to a bundle:
 
 ```ruby
 gem "fiber_audit", require: false
@@ -24,15 +29,15 @@ gem "fiber_audit", require: false
 
 ## Quick start
 
-Run from a project directory or any directory beneath it:
+Run from a project directory or beneath it:
 
 ```sh
 fiber-audit static
+fiber-audit runtime -- bundle exec rspec
 ```
 
-FiberAudit walks upward to find the nearest `Gemfile`, `gems.rb`, or
-`config/application.rb`. It loads `.fiber-audit.yml` from that root when the
-file exists.
+FiberAudit walks upward to the nearest `Gemfile`, `gems.rb`, or
+`config/application.rb` and loads `.fiber-audit.yml` from that root when present.
 
 ```text
 fiber-audit static [--format text|json] [--config PATH] [--out PATH]
@@ -44,9 +49,9 @@ fiber-audit explain FA1001
 fiber-audit version
 ```
 
-Output defaults to text on a TTY and JSON when piped. `--out PATH` defaults to
-JSON, writes only the report to that file, and prints a one-line confirmation.
-Explicit `--format` always wins.
+Static output defaults to text on a TTY and JSON when piped. `--out PATH`
+defaults to JSON, writes only the report to that file, and prints a one-line
+confirmation. Explicit `--format` always wins.
 
 ## Shipped rules
 
@@ -55,75 +60,124 @@ Explicit `--format` always wins.
 | FA1001 | Subprocess creation, replacement, waiting, and streams | info/medium |
 | FA1002 | Thread-wait scheduler coordination | low |
 | FA1003 | Synchronization scheduler coordination | low/info |
-| FA1004 | True Thread-variable state shared by sibling Fibers | high |
+| FA1004 | Thread-variable access shared across Fibers on one Thread | medium |
 | FA1005 | `IO.select` scheduler capability requirement | medium |
-| FA1006 | Socket/DNS/I/O scheduler cooperation | low |
+| FA1006 | Socket allocation and constructor endpoint semantics | low |
 | FA1007 | HTTP scheduler cooperation in request-like contexts | medium |
+
+FA1004 reports true `thread_variable_get/set` access. It does not retain keys or
+values and does not claim that request-sensitive leakage occurred. FA1006 keeps
+stable `<Class>.new` operation identities while distinguishing inventory-only
+allocation, address resolution/network endpoint setup, local connection, and
+unknown IPSocket-subclass construction.
 
 Use `fiber-audit explain <RULE_ID>` for exact targets and remediation.
 
 ## Runtime audit
 
-The explicit runtime command observes only a command supplied after `--`; it
-never executes source fragments discovered by static analysis:
+The runtime command observes only the command supplied after `--`; static
+analysis never executes discovered source fragments. Each observed Ruby process
+writes a separate owner-only JSONL schema `1.0` session under
+`tmp/fiber-audit-runtime` by default.
 
-```sh
-fiber-audit runtime -- bundle exec rspec
+Targeted probes cover the operations represented by FA1001–FA1007. Events retain
+canonical operation names, monotonic duration, conservative project-relative
+callsites, execution context, ephemeral Thread/Fiber identities, and allowlisted
+scalar measurements. They never retain commands, command arguments, URLs,
+addresses, hosts, ports, headers, payloads, responses, return values, exception
+messages, environment secrets, or thread-variable keys and values.
+
+Libraries such as Open3, Monitor, Socket, Net::HTTP, and OpenURI may load after
+runtime boot; FiberAudit rescans only known targets after `require`. Runtime
+wrappers remain inert outside explicit activation and after deactivation or fork.
+
+### Scheduler snapshots and operation classification
+
+A targeted operation snapshots scheduler state at its start. Measurement failure
+is represented as `nil` (unknown), never coerced to false:
+
+```text
+scheduler_present: true | false | nil
+fiber_blocking: true | false | nil
+scheduler_io_select_supported: true | false | nil
+scheduler_process_wait_supported: true | false | nil
+scheduler_address_resolve_supported: true | false | nil
 ```
 
-Each observed Ruby process writes a separate owner-only JSONL session under
-`tmp/fiber-audit-runtime` by default. Targeted probes observe the operations
-represented by FA1001–FA1007: subprocess calls, thread waits, synchronization,
-thread-local access, explicit select, direct sockets, and synchronous HTTP.
-Events contain canonical operation names, monotonic duration, and a conservative
-project-relative callsite. They never contain commands, URLs, addresses, ports,
-headers, payloads, responses, exception data, or thread-local keys and values.
-Libraries such as Open3, Monitor, Socket, Net::HTTP, and OpenURI may be loaded
-after runtime boot; FiberAudit rescans only these known targets after `require`.
+Operation-specific evidence adds five Boolean/nil measurements:
 
-Rails execution contexts (`:request`, `:middleware`, `:job`, `:websocket`) are
-captured automatically when Rails integration is active. A bounded, PID- and
-Thread-aware immutable context chain uses inheritable Ruby Fiber storage, so
-child Fibers receive a snapshot of their parent's logical context. FiberAudit's
-`ExecutionContext.clear!` explicitly detaches the current Fiber without allowing
-enclosing scopes to restore stale context. Rails boundaries use prepend hooks that become inert
-after deactivation or fork, preserving application semantics without interfering
-with normal Rails operation. The integration supports late loading: hooks are
-installed when Rails components become available, even after runtime boot.
-Raw runtime JSONL now records bounded `scheduler_stall_operation_overlap`
-events linking active operation sequences to watchdog stalls. This establishes
-temporal overlap, not causality. Combined static/runtime reporting remains future work.
+```text
+operation_wait_possible
+operation_inventory_only
+operation_scheduler_capability_required
+operation_scheduler_capability_supported
+operation_scheduler_cooperation_available
+```
 
-The scheduler watchdog records one bounded start/completion pair when its
-scheduler-owned heartbeat stops progressing past the configured threshold.
-Scheduler-friendly waits should continue heartbeats. A session also records an
-explicit watchdog state:
+`operation_scheduler_cooperation_available: true` means the captured scheduler
+and Fiber mode were compatible and, for an optional capability, the captured
+hook was supported. Required core coordination hooks such as `block` and
+`kernel_sleep` are inferred from known scheduler presence rather than measured
+separately. This does not prove that the operation cooperated or completed
+without delay. `nil` remains unknown or not applicable.
+
+### Scheduler watchdog
+
+The watchdog records one bounded start/completion pair when a scheduler-owned
+heartbeat stops progressing past its threshold. Scheduler-friendly waits should
+continue heartbeats. State events are:
 
 - `watchdog_active` — a heartbeat ran under an installed scheduler;
 - `watchdog_absent` — no scheduler was observed;
-- `watchdog_unsupported` — a scheduler could not safely host the heartbeat;
+- `watchdog_unsupported` — the scheduler could not safely host observation;
 - `watchdog_disabled` — watchdog policy disabled observation.
 
-Absent or unsupported monitoring, a clean session, and absence of stall events
-are **not** proof of fiber safety. Native work that holds Ruby's GVL can also
-prevent the watchdog thread from running until that work returns.
+Bounded `scheduler_stall_operation_overlap` events associate active operation
+sequences with a stall on the same Thread. They establish temporal overlap, not
+causality. Native work retaining Ruby's GVL can prevent the watchdog Thread from
+running until the work returns.
+
+### Long-active operation monitor
+
+The independent operation-liveness monitor polls the bounded active-operation
+registry. By default it polls every 100 ms and emits after an observed operation
+remains active for strictly more than 1 second. All targeted operation types are
+eligible, but entries beyond the snapshot bound can remain unobserved under
+registry pressure; truncation is explicit and absence is not a coverage claim:
+
+- `operation_liveness_active`;
+- `operation_liveness_disabled`;
+- `operation_liveness_unsupported`;
+- `operation_long_active_started`;
+- `operation_long_active_completed`.
+
+Ordinary registry removal closes a pair with `operation_finished: true`.
+Shutdown closes an open pair with `operation_finished: false`; that value does
+not mean the application operation failed. Long-active evidence means only that
+a targeted operation remained registered across the threshold. It is not a
+scheduler stall, proven deadlock, or proof of scheduler harm.
+
+Watchdog, liveness-state, overlap, and long-active events bypass random sampling
+but still consume recorder rate, event, record-size, and session-size budgets.
+Snapshot and per-poll truncation, drops, unsupported states, internal errors, and
+incomplete sessions remain visible. A successful `exec` may intentionally leave
+a session without `session_end`.
+
+Rails execution contexts (`request`, `middleware`, `job`, and `websocket`) are
+captured when Rails integration is active. Bounded immutable Fiber storage
+propagates logical context to child Fibers without retaining request data.
+Combined static/runtime reporting remains future work.
 
 ## Configuration
 
-Copy `.fiber-audit.example.yml` to `.fiber-audit.yml` in the project root.
-Paths and globs are rooted at the detected project. An explicit `--config`
-path is resolved from the directory where the command was invoked.
+Copy `.fiber-audit.example.yml` to `.fiber-audit.yml`. Paths and globs are rooted
+at the detected project; explicit `--config` is resolved from the invocation
+directory.
 
 ```yaml
 static:
-  include:
-    - app/**/*.rb
-    - lib/**/*.rb
-    - config/**/*.rb
-  exclude:
-    - vendor/**/*
-    - tmp/**/*
-    - db/schema.rb
+  include: [app/**/*.rb, lib/**/*.rb, config/**/*.rb]
+  exclude: [vendor/**/*, tmp/**/*, db/schema.rb]
   suppressions_path: .fiber-audit-suppressions.yml
 
 rules:
@@ -141,31 +195,37 @@ runtime:
     mode: strict
   sampling:
     rate: 0.1
+  overhead:
+    max_events_per_second: 100
+    max_events_per_session: 10000
+    max_record_bytes: 16384
+    max_session_bytes: 10485760
   watchdog:
     enabled: true
     heartbeat_interval_ms: 25
     stall_threshold_ms: 100
     max_frames: 20
+  operation_liveness:
+    enabled: true
+    poll_interval_ms: 100
+    long_active_threshold_ms: 1000
   fail_open: true
 ```
 
-`--min-severity` overrides `report.min_severity` for one run. Severity ordering
-is `critical`, `high`, `medium`, `low`, `info`; findings below the threshold
-are omitted and do not affect the exit code. The default `low` threshold keeps
-informational findings silent.
+Configuration is strict: unknown sections or keys, invalid types, and values
+outside policy bounds return exit code 2. `--min-severity` overrides
+`report.min_severity` for one static run. Severity ordering is `critical`,
+`high`, `medium`, `low`, `info`; the default `low` threshold omits informational
+findings.
 
 ## Suppressions
 
 Every suppression requires a non-empty reason. Directive-looking text inside
 strings, heredocs, or regular expressions is ignored.
 
-Suppress one line:
-
 ```ruby
 system(command) # fiber-audit:disable FA1001 -- trusted maintenance command
 ```
-
-Suppress a block:
 
 ```ruby
 # fiber-audit:disable FA1003 -- protected legacy boundary
@@ -173,8 +233,7 @@ mutex.synchronize { update_record }
 # fiber-audit:enable FA1003
 ```
 
-A separate YAML file can suppress by rule and optionally by symbol or
-operation. Point `static.suppressions_path` at the file:
+YAML suppressions can match rule and optionally symbol or operation:
 
 ```yaml
 suppressions:
@@ -184,29 +243,23 @@ suppressions:
     reason: isolated worker process with an external timeout
 ```
 
-Missing reasons and invalid configuration return exit code 2.
-
-## Static statuses
+## Static statuses and exit codes
 
 - `FAIL` — at least one critical or high finding.
-- `REVIEW` — a medium finding, or a non-informational low/unknown-confidence
-  finding.
+- `REVIEW` — a medium finding, or non-informational low/unknown-confidence risk.
 - `PASS_WITH_WARNINGS` — only low or informational findings.
 - `NO_FINDINGS` — no findings at the configured threshold.
 
-FiberAudit never emits unconditional `PASS` in v0.3.0.
-
-## Exit codes
+FiberAudit never emits unconditional `PASS`.
 
 | Code | Meaning |
 |---|---|
 | 0 | No active finding at or above the configured threshold |
 | 1 | One or more active findings at or above the threshold |
 | 2 | Invalid options, configuration, analysis, or report output |
-| 3 | Reserved; never emitted by v0.3.0 |
+| 3 | Reserved; not emitted |
 
-Source parse errors are included in report data while analysis continues on
-other files.
+Source parse errors remain report data while analysis continues on other files.
 
 ## Development and semantic verification
 
@@ -214,19 +267,19 @@ other files.
 bundle exec rspec
 bundle exec rubocop
 bundle exec ruby script/scheduler-semantics
+FIBER_AUDIT_BENCH_ITERATIONS=2000 bundle exec ruby benchmark/runtime_probe_overhead.rb
 gem build fiber_audit.gemspec
 bundle exec rake release:sanity
 ```
 
-The semantic probe uses only local Threads, pipes, and child processes. It checks
-scheduler coordination, Fiber-storage inheritance, Thread/Fiber state semantics,
-and rejected scheduler replacement against each supported Ruby in CI.
+The semantic script uses bounded local Threads, pipes, localhost resolution, and
+child processes. CI exercises it through the spec suite on tested CRuby versions.
+It verifies only scheduler capabilities consumed by FiberAudit; it is not a full
+scheduler-conformance suite.
 
-Relevant Ruby contracts:
+The benchmark reports absent, installed/inactive, active sampling-zero, and
+active sampling-one workloads in isolated subprocesses. It is diagnostic only:
+there is no host-dependent CI timing threshold.
 
-- [Fiber and inheritable storage](https://docs.ruby-lang.org/en/3.4/Fiber.html)
-- [Fiber::Scheduler hooks](https://docs.ruby-lang.org/en/3.4/Fiber/Scheduler.html)
-- [Thread Fiber-local and Thread-wide storage](https://docs.ruby-lang.org/en/3.4/Thread.html#method-i-5B-5D)
-
-See [ARCHITECTURE.md](ARCHITECTURE.md) for implementation boundaries, runtime
-architecture, raw stall-overlap evidence, and deferred combined reporting.
+See [ARCHITECTURE.md](ARCHITECTURE.md) for implementation boundaries and the
+runtime truthfulness, privacy, lifecycle, and schema contracts.

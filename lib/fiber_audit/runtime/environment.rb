@@ -7,6 +7,7 @@ require 'securerandom'
 require_relative 'policy'
 require_relative 'validation'
 require_relative 'watchdog_policy'
+require_relative 'operation_liveness_policy'
 
 module FiberAudit
   module Runtime
@@ -17,10 +18,12 @@ module FiberAudit
       SETTINGS_KEY = 'FIBER_AUDIT_RUNTIME_SETTINGS'
       FAILURE_MODE_KEY = 'FIBER_AUDIT_RUNTIME_FAILURE_MODE'
       WATCHDOG_SETTINGS_KEY = 'FIBER_AUDIT_RUNTIME_WATCHDOG_SETTINGS'
+      OPERATION_LIVENESS_SETTINGS_KEY = 'FIBER_AUDIT_RUNTIME_OPERATION_LIVENESS_SETTINGS'
       PROBES_KEY = 'FIBER_AUDIT_RUNTIME_PROBES'
       BOOT_REQUIRE = '-rfiber_audit/runtime/boot'
       MAX_SETTINGS_BYTES = 16_384
       MAX_WATCHDOG_SETTINGS_BYTES = 1_024
+      MAX_OPERATION_LIVENESS_SETTINGS_BYTES = 1_024
       SETTINGS_KEYS = %w[protocol_version launch_id project_root output_directory policy].freeze
       POLICY_KEYS = %w[
         redaction sampling_rate max_events_per_second max_events_per_session
@@ -28,6 +31,9 @@ module FiberAudit
       ].freeze
       WATCHDOG_KEYS = %w[
         protocol_version enabled heartbeat_interval_ms stall_threshold_ms max_frames
+      ].freeze
+      OPERATION_LIVENESS_KEYS = %w[
+        protocol_version enabled poll_interval_ms long_active_threshold_ms
       ].freeze
 
       Settings = Data.define(:protocol_version, :launch_id, :project_root, :output_directory, :policy) do
@@ -146,6 +152,45 @@ module FiberAudit
         raise RuntimeContractError, "invalid runtime watchdog activation settings: #{e.message}"
       end
 
+      def dump_operation_liveness_policy(policy)
+        require_operation_liveness_policy!(policy)
+        payload = {
+          'protocol_version' => PROTOCOL_VERSION,
+          'enabled' => policy.enabled,
+          'poll_interval_ms' => policy.poll_interval_ms,
+          'long_active_threshold_ms' => policy.long_active_threshold_ms
+        }
+        encoded = JSON.generate(payload)
+        if encoded.bytesize > MAX_OPERATION_LIVENESS_SETTINGS_BYTES
+          raise RuntimeSafetyError, 'runtime operation-liveness activation settings are too large'
+        end
+
+        encoded.freeze
+      end
+
+      def load_operation_liveness_policy(environment = ENV)
+        value = environment[OPERATION_LIVENESS_SETTINGS_KEY]
+        return OperationLivenessPolicy::DISABLED if value.nil?
+        unless value.is_a?(String) && value.valid_encoding? &&
+               value.bytesize <= MAX_OPERATION_LIVENESS_SETTINGS_BYTES
+          raise RuntimeContractError, 'runtime operation-liveness activation settings are invalid'
+        end
+
+        payload = JSON.parse(value)
+        require_exact_keys!(payload, OPERATION_LIVENESS_KEYS, 'runtime operation-liveness activation settings')
+        unless payload.fetch('protocol_version') == PROTOCOL_VERSION
+          raise RuntimeContractError, "runtime operation-liveness activation protocol must be #{PROTOCOL_VERSION}"
+        end
+
+        OperationLivenessPolicy.new(
+          enabled: payload.fetch('enabled'),
+          poll_interval_ms: payload.fetch('poll_interval_ms'),
+          long_active_threshold_ms: payload.fetch('long_active_threshold_ms')
+        )
+      rescue JSON::ParserError, ArgumentError => e
+        raise RuntimeContractError, "invalid runtime operation-liveness activation settings: #{e.message}"
+      end
+
       def activated?(environment = ENV)
         marker = environment[ACTIVATION_KEY]
         return false if marker.nil?
@@ -173,12 +218,14 @@ module FiberAudit
       def child_environment(
         settings:,
         watchdog_policy: nil,
+        operation_liveness_policy: nil,
         probes_enabled: false,
         base_environment: ENV,
         library_path: default_library_path
       )
         require_settings!(settings)
         require_watchdog_policy!(watchdog_policy) if watchdog_policy
+        require_operation_liveness_policy!(operation_liveness_policy) if operation_liveness_policy
         raise RuntimeContractError, 'probes_enabled must be a Boolean' unless [true, false].include?(probes_enabled)
         raise RuntimeContractError, 'base_environment must be a Hash-like object' unless base_environment.respond_to?(:[])
 
@@ -190,6 +237,9 @@ module FiberAudit
           'RUBYLIB' => prepend_token(base_environment['RUBYLIB'], library_path, separator: File::PATH_SEPARATOR)
         }
         environment[WATCHDOG_SETTINGS_KEY] = dump_watchdog_policy(watchdog_policy) if watchdog_policy
+        if operation_liveness_policy
+          environment[OPERATION_LIVENESS_SETTINGS_KEY] = dump_operation_liveness_policy(operation_liveness_policy)
+        end
         environment[PROBES_KEY] = '1' if probes_enabled
         environment.transform_values(&:freeze).freeze
       end
@@ -254,6 +304,14 @@ module FiberAudit
         raise RuntimeContractError, 'watchdog_policy must be FiberAudit::Runtime::WatchdogPolicy'
       end
       private_class_method :require_watchdog_policy!
+
+      def require_operation_liveness_policy!(value)
+        return if value.is_a?(OperationLivenessPolicy)
+
+        raise RuntimeContractError,
+              'operation_liveness_policy must be FiberAudit::Runtime::OperationLivenessPolicy'
+      end
+      private_class_method :require_operation_liveness_policy!
 
       def require_exact_keys!(value, expected, path)
         raise RuntimeContractError, "#{path} must be an object" unless value.is_a?(Hash)

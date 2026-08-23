@@ -44,24 +44,22 @@ RSpec.describe FiberAudit::Static::Rules::DirectSocket do
   end
 
   describe 'metadata' do
-    it 'has correct id' do
+    it 'keeps rule identity and advisory severity with a generic constructor title' do
       expect(described_class.id).to eq('FA1006')
-    end
-
-    it 'has correct severity' do
       expect(described_class.severity).to eq(:low)
-    end
-
-    it 'has correct default_confidence' do
       expect(described_class.default_confidence).to eq(:high)
-    end
-
-    it 'has correct title' do
-      expect(described_class.title).to eq('Direct socket creation')
-    end
-
-    it 'has correct category' do
+      expect(described_class.title).to eq('Direct socket construction')
       expect(described_class.category).to eq(:network)
+      expect(described_class.description).to include('inventory-only allocation')
+    end
+
+    it 'defines metadata for every shared socket semantic' do
+      expect(described_class::CATEGORY_METADATA.keys).to contain_exactly(
+        :socket_allocation,
+        :socket_resolve_connect,
+        :socket_local_connect,
+        :socket_constructor_unknown
+      )
     end
   end
 
@@ -69,17 +67,46 @@ RSpec.describe FiberAudit::Static::Rules::DirectSocket do
     context 'with exact socket constants' do
       %w[TCPSocket TCPServer UDPSocket UNIXSocket UNIXServer Socket IPSocket].each do |const|
         it "matches #{const}.new" do
-          cs = build_call_site(
-            receiver_source: const,
-            receiver_constant: const,
-            method_name: :new
-          )
+          cs = build_call_site(receiver_source: const, receiver_constant: const, method_name: :new)
           findings = rule.analyze(call_sites: [cs])
+
           expect(findings.size).to eq(1)
           expect(findings.first.operation).to eq("#{const}.new")
           expect(findings.first.rule_id).to eq('FA1006')
         end
       end
+    end
+
+    it 'distinguishes allocation, endpoint setup, local connection, and unknown subclass constructors' do
+      cases = {
+        'Socket' => [:socket_allocation, 'Direct socket allocation', false, true, nil],
+        'TCPSocket' => [:socket_resolve_connect, 'Direct socket endpoint setup', true, false, :address_resolve],
+        'UNIXSocket' => [:socket_local_connect, 'Direct local-socket connection', true, false, nil]
+      }
+
+      cases.each do |constant, (semantic, title, wait_possible, inventory_only, capability)|
+        finding = rule.analyze(call_sites: [build_call_site(receiver_source: constant,
+                                                            receiver_constant: constant)]).first
+        details = finding.evidence.first.details
+        expect(finding.operation).to eq("#{constant}.new")
+        expect(finding.title).to eq(title)
+        expect(details).to include(
+          semantic: semantic,
+          wait_possible: wait_possible,
+          inventory_only: inventory_only,
+          scheduler_capability: capability
+        )
+      end
+
+      allow(semantic_index).to receive(:ancestors_of)
+        .with('Project::ClientSocket')
+        .and_return(%w[IPSocket Object])
+      subclass = rule.analyze(call_sites: [build_call_site(
+        receiver_source: 'Project::ClientSocket',
+        receiver_constant: 'Project::ClientSocket'
+      )]).first
+      expect(subclass.title).to eq('Direct socket subclass construction')
+      expect(subclass.evidence.first.details[:semantic]).to eq(:socket_constructor_unknown)
     end
 
     context 'with IPSocket subclass' do
@@ -103,32 +130,20 @@ RSpec.describe FiberAudit::Static::Rules::DirectSocket do
 
     context 'with wrong method' do
       it 'does not match TCPSocket.open' do
-        cs = build_call_site(method_name: :open)
-        findings = rule.analyze(call_sites: [cs])
-        expect(findings).to be_empty
+        expect(rule.analyze(call_sites: [build_call_site(method_name: :open)])).to be_empty
       end
 
       it 'does not match TCPServer.accept' do
-        cs = build_call_site(
-          receiver_source: 'TCPServer',
-          receiver_constant: 'TCPServer',
-          method_name: :accept
-        )
-        findings = rule.analyze(call_sites: [cs])
-        expect(findings).to be_empty
+        cs = build_call_site(receiver_source: 'TCPServer', receiver_constant: 'TCPServer', method_name: :accept)
+        expect(rule.analyze(call_sites: [cs])).to be_empty
       end
     end
 
     context 'with unrelated constants' do
       %w[String Array Hash Object Thread IO].each do |const|
         it "does not match #{const}.new" do
-          cs = build_call_site(
-            receiver_source: const,
-            receiver_constant: const,
-            method_name: :new
-          )
-          findings = rule.analyze(call_sites: [cs])
-          expect(findings).to be_empty
+          cs = build_call_site(receiver_source: const, receiver_constant: const, method_name: :new)
+          expect(rule.analyze(call_sites: [cs])).to be_empty
         end
       end
     end
@@ -144,86 +159,48 @@ RSpec.describe FiberAudit::Static::Rules::DirectSocket do
           .with('TCPSocket', nesting: [])
           .and_return(shadow_const)
 
-        cs = build_call_site(
-          receiver_source: 'TCPSocket',
-          receiver_constant: 'TCPSocket',
-          method_name: :new,
-          nesting: []
-        )
-        findings = rule.analyze(call_sites: [cs])
-        expect(findings).to be_empty
+        cs = build_call_site(receiver_source: 'TCPSocket', receiver_constant: 'TCPSocket', method_name: :new,
+                             nesting: [])
+        expect(rule.analyze(call_sites: [cs])).to be_empty
       end
     end
 
     context 'with adapter failure' do
       it 'does not raise when semantic_index.ancestors_of raises' do
         allow(semantic_index).to receive(:ancestors_of).and_raise(StandardError.new('adapter error'))
+        cs = build_call_site(receiver_source: 'CustomSocket', receiver_constant: 'CustomSocket', method_name: :new)
 
-        cs = build_call_site(
-          receiver_source: 'CustomSocket',
-          receiver_constant: 'CustomSocket',
-          method_name: :new
-        )
         expect { rule.analyze(call_sites: [cs]) }.not_to raise_error
-        findings = rule.analyze(call_sites: [cs])
-        expect(findings).to be_empty
+        expect(rule.analyze(call_sites: [cs])).to be_empty
       end
 
       it 'does not raise when semantic_index.resolve_constant raises' do
         allow(semantic_index).to receive(:resolve_constant).and_raise(StandardError.new('adapter error'))
+        cs = build_call_site(receiver_source: 'TCPSocket', receiver_constant: 'TCPSocket', method_name: :new)
 
-        cs = build_call_site(
-          receiver_source: 'TCPSocket',
-          receiver_constant: 'TCPSocket',
-          method_name: :new
-        )
         expect { rule.analyze(call_sites: [cs]) }.not_to raise_error
       end
 
       it 'does not fabricate subclass matches when ancestors lookup fails' do
         allow(semantic_index).to receive(:ancestors_of).and_raise(StandardError)
+        cs = build_call_site(receiver_source: 'MaybeSocket', receiver_constant: 'MaybeSocket', method_name: :new)
 
-        cs = build_call_site(
-          receiver_source: 'MaybeSocket',
-          receiver_constant: 'MaybeSocket',
-          method_name: :new
-        )
-        findings = rule.analyze(call_sites: [cs])
-        expect(findings).to be_empty
+        expect(rule.analyze(call_sites: [cs])).to be_empty
       end
     end
 
     context 'with nil receiver_constant' do
       it 'does not match' do
-        cs = build_call_site(receiver_constant: nil)
-        findings = rule.analyze(call_sites: [cs])
-        expect(findings).to be_empty
+        expect(rule.analyze(call_sites: [build_call_site(receiver_constant: nil)])).to be_empty
       end
     end
 
     context 'advisory severity (no context escalation)' do
-      it 'stays :low in :request context (no escalation)' do
-        cs = build_call_site(execution_context: :request)
-        findings = rule.analyze(call_sites: [cs])
-        expect(findings.first.severity).to eq(:low)
-      end
-
-      it 'stays :low in :rake_task context' do
-        cs = build_call_site(execution_context: :rake_task)
-        findings = rule.analyze(call_sites: [cs])
-        expect(findings.first.severity).to eq(:low)
-      end
-
-      it 'stays :low in :middleware context (no escalation)' do
-        cs = build_call_site(execution_context: :middleware)
-        findings = rule.analyze(call_sites: [cs])
-        expect(findings.first.severity).to eq(:low)
-      end
-
-      it 'stays :low in :job context (no escalation)' do
-        cs = build_call_site(execution_context: :job)
-        findings = rule.analyze(call_sites: [cs])
-        expect(findings.first.severity).to eq(:low)
+      %i[request rake_task middleware job].each do |context|
+        it "stays :low in #{context} context" do
+          finding = rule.analyze(call_sites: [build_call_site(execution_context: context)]).first
+          expect(finding.severity).to eq(:low)
+        end
       end
     end
 
@@ -233,68 +210,37 @@ RSpec.describe FiberAudit::Static::Rules::DirectSocket do
       end
 
       it 'applies configuration override without context ceiling' do
-        cs = build_call_site(execution_context: :request)
-        findings = rule.analyze(call_sites: [cs])
-        expect(findings.first.severity).to eq(:medium)
+        finding = rule.analyze(call_sites: [build_call_site(execution_context: :request)]).first
+        expect(finding.severity).to eq(:medium)
       end
     end
 
     context 'confidence' do
       it 'inherits confidence from call site' do
-        cs = build_call_site(confidence: :high)
-        findings = rule.analyze(call_sites: [cs])
-        expect(findings.first.confidence).to eq(:high)
+        finding = rule.analyze(call_sites: [build_call_site(confidence: :high)]).first
+        expect(finding.confidence).to eq(:high)
       end
 
       it 'preserves low confidence from call site' do
-        cs = build_call_site(confidence: :low)
-        findings = rule.analyze(call_sites: [cs])
-        expect(findings.first.confidence).to eq(:low)
-      end
-    end
-
-    context 'operation field' do
-      it 'uses canonical format: constant.new' do
-        cs = build_call_site(
-          receiver_source: 'TCPSocket',
-          receiver_constant: 'TCPSocket'
-        )
-        findings = rule.analyze(call_sites: [cs])
-        expect(findings.first.operation).to eq('TCPSocket.new')
-      end
-
-      it 'retains subclass name in operation' do
-        allow(semantic_index).to receive(:ancestors_of)
-          .with('MySocket')
-          .and_return(%w[IPSocket Object])
-
-        cs = build_call_site(
-          receiver_source: 'MySocket',
-          receiver_constant: 'MySocket'
-        )
-        findings = rule.analyze(call_sites: [cs])
-        expect(findings.first.operation).to eq('MySocket.new')
+        finding = rule.analyze(call_sites: [build_call_site(confidence: :low)]).first
+        expect(finding.confidence).to eq(:low)
       end
     end
 
     context 'finding fields' do
-      it 'populates all required fields correctly' do
-        cs = build_call_site(
+      it 'preserves identity while narrowing endpoint-setup evidence' do
+        finding = rule.analyze(call_sites: [build_call_site(
           path: 'app/socket.rb',
           line: 10,
           column: 2,
           receiver_source: 'TCPSocket',
           receiver_constant: 'TCPSocket',
-          method_name: :new,
           enclosing_symbol: 'SocketHandler#connect',
-          execution_context: :request,
-          confidence: :high
-        )
-        findings = rule.analyze(call_sites: [cs])
-        finding = findings.first
+          execution_context: :request
+        )]).first
 
         expect(finding.rule_id).to eq('FA1006')
-        expect(finding.title).to eq('Direct socket creation')
+        expect(finding.title).to eq('Direct socket endpoint setup')
         expect(finding.category).to eq(:network)
         expect(finding.severity).to eq(:low)
         expect(finding.confidence).to eq(:high)
@@ -304,12 +250,12 @@ RSpec.describe FiberAudit::Static::Rules::DirectSocket do
         expect(finding.location.path).to eq('app/socket.rb')
         expect(finding.location.line).to eq(10)
         expect(finding.location.column).to eq(2)
-        expect(finding.message).to include('scheduler cooperation for DNS')
-        expect(finding.remediation).to include('verify the active scheduler hooks')
-        expect(finding.evidence.size).to eq(1)
-        expect(finding.evidence.first.source).to eq('static_analysis')
-        expect(finding.evidence.first.details[:receiver_constant]).to eq('TCPSocket')
-        expect(finding.evidence.first.details[:method]).to eq(:new)
+        expect(finding.message).to eq(
+          'This constructor may resolve an address and establish a network endpoint, requiring ' \
+          'scheduler cooperation from address-resolution and I/O hooks.'
+        )
+        expect(finding.remediation).to include('Verify address_resolve')
+        expect(finding.evidence.first.message).to eq('Matched TCPSocket.new (socket_resolve_connect)')
       end
     end
 
@@ -318,20 +264,16 @@ RSpec.describe FiberAudit::Static::Rules::DirectSocket do
         cs1 = build_call_site(path: 'test.rb', line: 1, enclosing_symbol: 'foo')
         cs2 = build_call_site(path: 'test.rb', line: 1, enclosing_symbol: 'foo')
 
-        findings1 = rule.analyze(call_sites: [cs1])
-        findings2 = rule.analyze(call_sites: [cs2])
-
-        expect(findings1.first.fingerprint).to eq(findings2.first.fingerprint)
+        expect(rule.analyze(call_sites: [cs1]).first.fingerprint)
+          .to eq(rule.analyze(call_sites: [cs2]).first.fingerprint)
       end
 
       it 'keeps fingerprints stable when only the line changes' do
         cs1 = build_call_site(path: 'test.rb', line: 1)
         cs2 = build_call_site(path: 'test.rb', line: 2)
 
-        findings1 = rule.analyze(call_sites: [cs1])
-        findings2 = rule.analyze(call_sites: [cs2])
-
-        expect(findings1.first.fingerprint).to eq(findings2.first.fingerprint)
+        expect(rule.analyze(call_sites: [cs1]).first.fingerprint)
+          .to eq(rule.analyze(call_sites: [cs2]).first.fingerprint)
       end
     end
   end
@@ -380,8 +322,7 @@ RSpec.describe FiberAudit::Static::Rules::DirectSocket do
       let(:fixture_file) { fixtures_path('rules', 'FA1006', 'negative.rb') }
 
       it 'does not match any call sites' do
-        findings = rule.analyze(call_sites: result.call_sites)
-        expect(findings).to be_empty
+        expect(rule.analyze(call_sites: result.call_sites)).to be_empty
       end
     end
   end
@@ -402,10 +343,7 @@ RSpec.describe FiberAudit::Static::Rules::DirectSocket do
     end
 
     it 'uses workspace directly when it responds to ancestors_of' do
-      cs = build_call_site(
-        receiver_source: 'CustomSocket',
-        receiver_constant: 'CustomSocket'
-      )
+      cs = build_call_site(receiver_source: 'CustomSocket', receiver_constant: 'CustomSocket')
       findings = rule.analyze(call_sites: [cs])
       expect(findings.size).to eq(1)
       expect(findings.first.operation).to eq('CustomSocket.new')

@@ -1,12 +1,12 @@
 {
   "schema_version": "1.0",
   "tool_version": "0.3.0",
-  "status": "FAIL",
+  "status": "REVIEW",
   "disclaimer": "This is a static-only audit. PASS cannot be granted without runtime coverage.",
   "summary": {
-    "critical": 1,
+    "critical": 0,
     "high": 0,
-    "medium": 3,
+    "medium": 4,
     "low": 3,
     "info": 0,
     "suppressed": 0,
@@ -18,34 +18,6 @@
     "rules_run": 7
   },
   "findings": [
-    {
-      "rule_id": "FA1004",
-      "title": "Thread thread variables in fiber code",
-      "category": "thread_local",
-      "severity": "critical",
-      "confidence": "high",
-      "location": {
-        "path": "app/controllers/fiber_blockers_controller.rb",
-        "line": 8,
-        "column": 4
-      },
-      "symbol": "FiberBlockersController#index",
-      "operation": "Thread.thread_variable_get",
-      "execution_context": "request",
-      "message": "Thread thread variables are shared across all fibers on the same thread and may leak request-local data between concurrent requests.",
-      "evidence": [
-        {
-          "source": "Thread.current",
-          "message": "Thread thread variable access via thread_variable_get",
-          "details": {
-            "operation": "Thread.thread_variable_get",
-            "receiver": "Thread.current"
-          }
-        }
-      ],
-      "remediation": "Prefer fiber-local storage (Fiber[:key]) or framework-provided request-local state over thread_variable_get/set.",
-      "fingerprint": "ae61d31894596bb0908c5bc7ac7a498f589bd9d784225790ec75579b55e05066"
-    },
     {
       "rule_id": "FA1001",
       "title": "Subprocess wait",
@@ -74,6 +46,34 @@
       ],
       "remediation": "Verify scheduler process_wait support and runtime progress, or move waits outside the fiber-scheduled path.",
       "fingerprint": "8ba0b7c42c83edd347a9dcb7dbc76272f0c6cacb82c2957f82d319a5fc3ae431"
+    },
+    {
+      "rule_id": "FA1004",
+      "title": "Thread-variable access shared across fibers",
+      "category": "thread_local",
+      "severity": "medium",
+      "confidence": "high",
+      "location": {
+        "path": "app/controllers/fiber_blockers_controller.rb",
+        "line": 8,
+        "column": 4
+      },
+      "symbol": "FiberBlockersController#index",
+      "operation": "Thread.thread_variable_get",
+      "execution_context": "request",
+      "message": "Thread variables are visible to fibers sharing a thread. This access may expose mutable state across concurrent work, but static analysis does not establish request-sensitive leakage.",
+      "evidence": [
+        {
+          "source": "Thread.current",
+          "message": "Matched thread-variable access via thread_variable_get",
+          "details": {
+            "operation": "Thread.thread_variable_get",
+            "receiver": "Thread.current"
+          }
+        }
+      ],
+      "remediation": "Prefer fiber-local storage (Fiber[:key]) or framework-provided request-local state over thread_variable_get/set.",
+      "fingerprint": "ae61d31894596bb0908c5bc7ac7a498f589bd9d784225790ec75579b55e05066"
     },
     {
       "rule_id": "FA1005",
@@ -195,7 +195,7 @@
     },
     {
       "rule_id": "FA1006",
-      "title": "Direct socket creation",
+      "title": "Direct socket endpoint setup",
       "category": "network",
       "severity": "low",
       "confidence": "high",
@@ -207,18 +207,22 @@
       "symbol": "FiberBlockersController#index",
       "operation": "TCPSocket.new",
       "execution_context": "request",
-      "message": "This socket path may require scheduler cooperation for DNS, connection, or subsequent I/O.",
+      "message": "This constructor may resolve an address and establish a network endpoint, requiring scheduler cooperation from address-resolution and I/O hooks.",
       "evidence": [
         {
           "source": "static_analysis",
-          "message": "Direct socket creation: TCPSocket.new",
+          "message": "Matched TCPSocket.new (socket_resolve_connect)",
           "details": {
             "receiver_constant": "TCPSocket",
-            "method": "new"
+            "method": "new",
+            "semantic": "socket_resolve_connect",
+            "wait_possible": true,
+            "inventory_only": false,
+            "scheduler_capability": "address_resolve"
           }
         }
       ],
-      "remediation": "Distinguish allocation from DNS/connect/I/O, then verify the active scheduler hooks and runtime progress.",
+      "remediation": "Verify address_resolve and scheduler-aware I/O hooks, and confirm runtime progress for endpoint setup.",
       "fingerprint": "1722124be59a67a7e385b0f8c53bdc391790e094eedfa6c43e3bdbaf7c4c4bd5"
     }
   ],

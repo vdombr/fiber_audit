@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+### Added
+
+- Added a lifecycle-owned operation-liveness monitor with strict policy transport,
+  explicit active/disabled/unsupported states, and bounded long-active
+  start/completion evidence independent of scheduler-heartbeat stalls.
+- Added shared operation semantics and five Boolean/nil scheduler-classification
+  measurements to targeted operations, watchdog overlaps, and long-active events.
+- Expanded the bounded scheduler semantic matrix for Process wait variants,
+  coordination hooks, localhost address resolution, and Ruby 4 IO-close
+  interruption; added a local measurement-only runtime probe benchmark.
+
+### Changed
+
+- Scheduler snapshot failures now remain `nil`/unknown in JSONL schema 1.0 rather
+  than asserting false state.
+- FA1006 keeps rule/operation identity while distinguishing socket allocation,
+  endpoint setup, local connection, and unknown subclass constructor semantics.
+- FA1004 now reports medium severity without execution-context escalation and
+  describes possible shared-state exposure without claiming request leakage.
+- Documented the tested support contract as CRuby 3.3, 3.4, and 4.0 on Ubuntu
+  Linux; the gem installation requirement remains Ruby 3.3 or newer.
+
+### Fixed
+
+- Corrected scheduler snapshots to preserve the actual `Fiber#blocking?` Boolean
+  instead of converting both blocking and non-blocking Fibers to true.
+
 ## 0.3.0 (2026-08-12)
 
 ### Changed

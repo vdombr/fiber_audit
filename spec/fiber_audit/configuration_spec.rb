@@ -736,6 +736,61 @@ RSpec.describe FiberAudit::Configuration do
     end
   end
 
+  describe 'runtime operation-liveness configuration' do
+    it 'uses the frozen operation-liveness defaults' do
+      expect(described_class.new.runtime_operation_liveness_policy.to_h).to eq(
+        enabled: true,
+        poll_interval_ms: 100,
+        long_active_threshold_ms: 1_000
+      )
+    end
+
+    it 'loads the complete strict operation-liveness policy' do
+      yaml = {
+        'runtime' => {
+          'operation_liveness' => {
+            'enabled' => false,
+            'poll_interval_ms' => 250,
+            'long_active_threshold_ms' => 2_000
+          }
+        }
+      }
+
+      with_configuration(yaml) do |config|
+        expect(config.runtime_operation_liveness_policy.to_h).to eq(
+          enabled: false,
+          poll_interval_ms: 250,
+          long_active_threshold_ms: 2_000
+        )
+      end
+    end
+
+    it 'rejects non-mapping, unknown, and invalid operation-liveness settings' do
+      expect { with_configuration('runtime' => { 'operation_liveness' => [] }) { nil } }
+        .to raise_error(FiberAudit::ConfigurationError, /runtime\.operation_liveness must be a mapping/)
+      expect do
+        with_configuration('runtime' => { 'operation_liveness' => { 'command' => 'secret' } }) { nil }
+      end.to raise_error(FiberAudit::ConfigurationError, /unknown configuration key 'command'/)
+      expect do
+        with_configuration('runtime' => { 'operation_liveness' => { 'poll_interval_ms' => 0 } }) { nil }
+      end.to raise_error(FiberAudit::ConfigurationError, /runtime\.operation_liveness\.poll_interval_ms is invalid/)
+    end
+
+    it 'rejects a non-operation-liveness policy passed directly' do
+      expect { described_class.new(runtime_operation_liveness_policy: {}) }
+        .to raise_error(FiberAudit::ConfigurationError, /runtime_operation_liveness_policy/)
+    end
+
+    it 'loads the operation-liveness dependency standalone' do
+      output, stderr, status = Open3.capture3(
+        RbConfig.ruby, '-Ilib', '-rfiber_audit/configuration',
+        '-e', 'puts FiberAudit::Configuration.new.runtime_operation_liveness_policy.class'
+      )
+      expect(status).to be_success, stderr
+      expect(output.strip).to eq('FiberAudit::Runtime::OperationLivenessPolicy')
+    end
+  end
+
   describe 'Configuration.load severity coercion' do
     it 'does not call to_sym on arbitrary YAML min_severity' do
       yaml_content = {

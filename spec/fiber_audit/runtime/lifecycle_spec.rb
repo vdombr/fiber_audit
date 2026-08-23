@@ -293,6 +293,85 @@ RSpec.describe FiberAudit::Runtime::Lifecycle do
     end
   end
 
+  it 'owns liveness state only with probes and closes monitor evidence before the recorder' do
+    with_runtime do |root, output|
+      streams = {}
+      lifecycle = described_class.start(
+        settings: build_settings(root: root, output: output),
+        operation_liveness_policy: FiberAudit::Runtime::OperationLivenessPolicy.new(
+          poll_interval_ms: 60_000,
+          long_active_threshold_ms: 1
+        ),
+        probes_enabled: true,
+        clock: build_clock,
+        session_id_source: -> { session_ids.first },
+        pid_source: -> { 4550 },
+        writer_factory: memory_writer_factory(streams)
+      )
+      handle = lifecycle.active_operations.register(
+        operation: 'Mutex#lock',
+        monotonic_ns: 0,
+        location: FiberAudit::Runtime::Location.new(path: 'app/task.rb', line: 1)
+      )
+      lifecycle.operation_liveness_monitor.poll(now_ns: 1_000_001)
+      lifecycle.shutdown
+
+      records = streams.fetch(lifecycle.output_path).string.lines.map { |line| JSON.parse(line) }
+      kinds = records.filter_map { |record| record.dig('payload', 'kind') }
+      expect(kinds).to eq(
+        %w[operation_liveness_active operation_long_active_started operation_long_active_completed]
+      )
+      completion = records.find { |record| record.dig('payload', 'kind') == 'operation_long_active_completed' }
+      expect(completion.dig('payload', 'measurements', 'operation_finished')).to be(false)
+      expect(records.last['record_type']).to eq('session_end')
+      expect(lifecycle.active_operations.finish(handle))
+        .to be_a(FiberAudit::Runtime::ActiveOperations::Entry)
+    end
+  end
+
+  it 'does not create a liveness monitor when probes are absent' do
+    with_runtime do |root, output|
+      lifecycle = described_class.start(
+        settings: build_settings(root: root, output: output),
+        operation_liveness_policy: FiberAudit::Runtime::OperationLivenessPolicy.new,
+        probes_enabled: false,
+        clock: build_clock,
+        session_id_source: -> { session_ids.first },
+        pid_source: -> { 4560 },
+        writer_factory: memory_writer_factory({})
+      )
+
+      expect(lifecycle.operation_liveness_monitor).to be_nil
+      lifecycle.shutdown
+    end
+  end
+
+  it 'rebuilds liveness state after PID change without stopping inherited monitor locks' do
+    with_runtime do |root, output|
+      streams = {}
+      ids = session_ids.dup
+      pid = 6550
+      lifecycle = described_class.start(
+        settings: build_settings(root: root, output: output),
+        operation_liveness_policy: FiberAudit::Runtime::OperationLivenessPolicy::DISABLED,
+        probes_enabled: true,
+        clock: build_clock,
+        session_id_source: -> { ids.shift },
+        pid_source: -> { pid },
+        writer_factory: memory_writer_factory(streams)
+      )
+      parent_monitor = lifecycle.operation_liveness_monitor
+      expect(parent_monitor).not_to receive(:stop)
+      pid = 6551
+
+      lifecycle.ensure_current_process!
+
+      expect(lifecycle.operation_liveness_monitor).not_to equal(parent_monitor)
+      expect(lifecycle.owner_pid).to eq(6551)
+      lifecycle.shutdown
+    end
+  end
+
   let(:fail_after_writes_io_class) do
     Class.new do
       def initialize(successful_writes:, error:)

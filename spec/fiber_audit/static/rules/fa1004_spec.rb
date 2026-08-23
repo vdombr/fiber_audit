@@ -39,59 +39,51 @@ RSpec.describe FiberAudit::Static::Rules::ThreadCurrentState do
 
   describe '#analyze' do
     context 'thread_variable_get on Thread.current' do
-      it 'emits a finding with request context severity' do
-        cs = build_call_site(method_name: :thread_variable_get, execution_context: :request)
-        findings = rule.analyze(call_sites: [cs])
+      it 'emits a medium finding in request context' do
+        site = build_call_site(method_name: :thread_variable_get, execution_context: :request)
+        finding = rule.analyze(call_sites: [site]).first
 
-        expect(findings.size).to eq(1)
-        expect(findings.first.severity).to eq(:critical)
-        expect(findings.first.confidence).to eq(:high)
-        expect(findings.first.operation).to eq('Thread.thread_variable_get')
+        expect(finding.severity).to eq(:medium)
+        expect(finding.confidence).to eq(:high)
+        expect(finding.operation).to eq('Thread.thread_variable_get')
       end
 
-      it 'emits a finding with rake context severity' do
-        cs = build_call_site(method_name: :thread_variable_get, execution_context: :rake_task)
-        findings = rule.analyze(call_sites: [cs])
+      it 'emits a medium finding in rake context' do
+        site = build_call_site(method_name: :thread_variable_get, execution_context: :rake_task)
+        finding = rule.analyze(call_sites: [site]).first
 
-        expect(findings.size).to eq(1)
-        expect(findings.first.severity).to eq(:high)
+        expect(finding.severity).to eq(:medium)
       end
     end
 
     context 'thread_variable_set on Thread.current' do
-      it 'emits a finding with request context severity' do
-        cs = build_call_site(method_name: :thread_variable_set, execution_context: :request)
-        findings = rule.analyze(call_sites: [cs])
+      it 'emits a medium finding in request context' do
+        site = build_call_site(method_name: :thread_variable_set, execution_context: :request)
+        finding = rule.analyze(call_sites: [site]).first
 
-        expect(findings.size).to eq(1)
-        expect(findings.first.severity).to eq(:critical)
-        expect(findings.first.operation).to eq('Thread.thread_variable_set')
+        expect(finding.severity).to eq(:medium)
+        expect(finding.operation).to eq('Thread.thread_variable_set')
       end
 
-      it 'emits a finding with rake context severity' do
-        cs = build_call_site(method_name: :thread_variable_set, execution_context: :rake_task)
-        findings = rule.analyze(call_sites: [cs])
+      it 'emits a medium finding in rake context' do
+        site = build_call_site(method_name: :thread_variable_set, execution_context: :rake_task)
+        finding = rule.analyze(call_sites: [site]).first
 
-        expect(findings.size).to eq(1)
-        expect(findings.first.severity).to eq(:high)
+        expect(finding.severity).to eq(:medium)
       end
     end
 
     context 'Thread.current[] (index read) - NOT detected' do
       it 'does not emit a finding for index read' do
         cs = build_call_site(method_name: :[], execution_context: :request)
-        findings = rule.analyze(call_sites: [cs])
-
-        expect(findings).to be_empty
+        expect(rule.analyze(call_sites: [cs])).to be_empty
       end
     end
 
     context 'Thread.current[]= (index write) - NOT detected' do
       it 'does not emit a finding for index write' do
         cs = build_call_site(method_name: :[]=, execution_context: :request)
-        findings = rule.analyze(call_sites: [cs])
-
-        expect(findings).to be_empty
+        expect(rule.analyze(call_sites: [cs])).to be_empty
       end
     end
 
@@ -116,16 +108,12 @@ RSpec.describe FiberAudit::Static::Rules::ThreadCurrentState do
           receiver_source: 'ActiveSupport::CurrentAttributes',
           receiver_constant: 'ActiveSupport::CurrentAttributes'
         )
-        findings = rule.analyze(call_sites: [cs])
-
-        expect(findings).to be_empty
+        expect(rule.analyze(call_sites: [cs])).to be_empty
       end
 
       it 'skips arbitrary methods on Thread.current' do
         cs = build_call_site(method_name: :some_other_method)
-        findings = rule.analyze(call_sites: [cs])
-
-        expect(findings).to be_empty
+        expect(rule.analyze(call_sites: [cs])).to be_empty
       end
 
       it 'skips direct Thread class calls' do
@@ -134,9 +122,7 @@ RSpec.describe FiberAudit::Static::Rules::ThreadCurrentState do
           receiver_source: 'Thread',
           receiver_constant: 'Thread'
         )
-        findings = rule.analyze(call_sites: [cs])
-
-        expect(findings).to be_empty
+        expect(rule.analyze(call_sites: [cs])).to be_empty
       end
 
       it 'skips workspace-shadowed Thread' do
@@ -144,9 +130,7 @@ RSpec.describe FiberAudit::Static::Rules::ThreadCurrentState do
         allow(workspace).to receive(:resolve_constant).and_return(shadowed_constant)
 
         cs = build_call_site(method_name: :thread_variable_get)
-        findings = rule.analyze(call_sites: [cs])
-
-        expect(findings).to be_empty
+        expect(rule.analyze(call_sites: [cs])).to be_empty
       end
 
       it 'handles adapter errors gracefully' do
@@ -157,18 +141,37 @@ RSpec.describe FiberAudit::Static::Rules::ThreadCurrentState do
       end
     end
 
+    it 'uses medium severity without execution-context escalation' do
+      expect(described_class.default_severity).to eq(:medium)
+
+      %i[request middleware callback job rake_task unknown].each do |context|
+        get = build_call_site(method_name: :thread_variable_get, execution_context: context)
+        set = build_call_site(method_name: :thread_variable_set, execution_context: context)
+        expect(rule.analyze(call_sites: [get, set]).map(&:severity)).to eq(%i[medium medium])
+      end
+    end
+
+    context 'with configuration override' do
+      let(:configuration) do
+        instance_double(FiberAudit::Configuration, severity_override: :high)
+      end
+
+      it 'uses the explicit override without context escalation' do
+        finding = rule.analyze(call_sites: [build_call_site(execution_context: :request)]).first
+        expect(finding.severity).to eq(:high)
+      end
+    end
+
     context 'finding fields' do
-      it 'includes all required fields' do
-        cs = build_call_site(method_name: :thread_variable_get, execution_context: :request)
-        findings = rule.analyze(call_sites: [cs])
-        finding = findings.first
+      it 'states possible shared-state exposure without claiming request-sensitive leakage' do
+        finding = rule.analyze(call_sites: [build_call_site(execution_context: :request)]).first
 
         expect(finding.rule_id).to eq('FA1004')
-        expect(finding.title).to eq('Thread thread variables in fiber code')
+        expect(finding.title).to eq('Thread-variable access shared across fibers')
         expect(finding.category).to eq(:thread_local)
         expect(finding.message).to eq(
-          'Thread thread variables are shared across all fibers on the same thread ' \
-          'and may leak request-local data between concurrent requests.'
+          'Thread variables are visible to fibers sharing a thread. This access may expose mutable ' \
+          'state across concurrent work, but static analysis does not establish request-sensitive leakage.'
         )
         expect(finding.remediation).to eq(
           'Prefer fiber-local storage (Fiber[:key]) or framework-provided ' \
@@ -177,7 +180,9 @@ RSpec.describe FiberAudit::Static::Rules::ThreadCurrentState do
         expect(finding.symbol).to eq('User#process')
         expect(finding.execution_context).to eq(:request)
         expect(finding.location).to be_a(FiberAudit::Location)
-        expect(finding.evidence).not_to be_empty
+        expect(finding.evidence.first.message).to eq(
+          'Matched thread-variable access via thread_variable_get'
+        )
       end
 
       it 'generates a stable fingerprint' do
@@ -189,7 +194,7 @@ RSpec.describe FiberAudit::Static::Rules::ThreadCurrentState do
 
         expect(finding1.fingerprint).to eq(finding2.fingerprint)
         expect(finding1.fingerprint).to be_a(String)
-        expect(finding1.fingerprint.length).to eq(64) # SHA256 hex digest
+        expect(finding1.fingerprint.length).to eq(64)
       end
     end
 
@@ -200,21 +205,32 @@ RSpec.describe FiberAudit::Static::Rules::ThreadCurrentState do
 
         findings = rule.analyze(call_sites: [cs1, cs2])
 
-        expect(findings.all? { |f| f.confidence == :high }).to be true
+        expect(findings.all? { |finding| finding.confidence == :high }).to be true
       end
     end
 
     context 'evidence' do
       it 'includes operation and receiver in evidence details' do
         cs = build_call_site(method_name: :thread_variable_get, execution_context: :request)
-        findings = rule.analyze(call_sites: [cs])
-        evidence = findings.first.evidence.first
+        evidence = rule.analyze(call_sites: [cs]).first.evidence.first
 
         expect(evidence.source).to eq('Thread.current')
-        expect(evidence.message).to eq('Thread thread variable access via thread_variable_get')
+        expect(evidence.message).to eq('Matched thread-variable access via thread_variable_get')
         expect(evidence.details[:operation]).to eq('Thread.thread_variable_get')
         expect(evidence.details[:receiver]).to eq('Thread.current')
       end
+    end
+
+    it 'does not retain thread-variable keys or values in finding evidence' do
+      secret_key = 'private-thread-key-sentinel'
+      secret_value = 'private-thread-value-sentinel'
+      site = build_call_site(arguments: [secret_key, secret_value])
+
+      finding = rule.analyze(call_sites: [site]).first
+      serialized = finding.to_h.to_s
+
+      expect(serialized).not_to include(secret_key, secret_value)
+      expect(finding.evidence.first.details.keys).to contain_exactly(:operation, :receiver)
     end
   end
 end

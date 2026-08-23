@@ -101,6 +101,7 @@ module FiberAudit
       environment = Runtime::Environment.child_environment(
         settings: settings,
         watchdog_policy: configuration.runtime_watchdog_policy,
+        operation_liveness_policy: configuration.runtime_operation_liveness_policy,
         probes_enabled: true
       )
       Runtime::Supervisor.new(
@@ -202,7 +203,8 @@ module FiberAudit
         min_severity: severity,
         suppressions_path: configuration.suppressions_path,
         runtime_policy: configuration.runtime_policy,
-        runtime_watchdog_policy: configuration.runtime_watchdog_policy
+        runtime_watchdog_policy: configuration.runtime_watchdog_policy,
+        runtime_operation_liveness_policy: configuration.runtime_operation_liveness_policy
       )
     end
 

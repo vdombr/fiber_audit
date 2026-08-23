@@ -73,6 +73,15 @@ RSpec.describe FiberAudit::Static::Rules::BlockingSubprocess do
       expect(described_class::OPERATION_CATEGORY).not_to be_empty
     end
 
+    it 'uses the shared operation-semantic categories without a duplicate table' do
+      expect(described_class::OPERATION_CATEGORY).to equal(FiberAudit::OperationSemantics::FA1001_CATEGORIES)
+      expect(described_class::OPERATION_CATEGORY).to include(
+        'Kernel.spawn' => :creation,
+        'Kernel.system' => :waiting,
+        'IO.popen' => :stream
+      )
+    end
+
     it 'defines CATEGORY_METADATA for all categories' do
       expect(described_class::CATEGORY_METADATA).to be_a(Hash)
       expect(described_class::CATEGORY_METADATA.keys).to contain_exactly(

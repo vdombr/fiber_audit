@@ -60,6 +60,31 @@ RSpec.describe FiberAudit::Runtime::ActiveOperations do
     expect(registry.size).to eq(2)
   end
 
+  it 'returns entries and the untruncated count atomically' do
+    registry = described_class.new(snapshot_limit: 1)
+    2.times { register(registry) }
+
+    snapshot = registry.snapshot_with_metadata
+
+    expect(snapshot.entries.map(&:sequence)).to eq([1])
+    expect(snapshot.total_count).to eq(2)
+    expect(snapshot).to be_truncated
+    expect(snapshot.entries).to be_frozen
+  end
+
+  it 'keeps thread filtering and total count in the same snapshot lock' do
+    registry = described_class.new
+    first_thread = Object.new
+    second_thread = Object.new
+    [first_thread, second_thread].each { |thread| register(registry, operation: 'Thread#join', thread: thread) }
+
+    snapshot = registry.snapshot_with_metadata(thread_id: first_thread.object_id)
+
+    expect(snapshot.total_count).to eq(1)
+    expect(snapshot.entries.map(&:thread_id)).to eq([first_thread.object_id])
+    expect(snapshot).not_to be_truncated
+  end
+
   it 'assigns unique contiguous sequences under concurrency' do
     registry = described_class.new
     handles = 20.times.map { Thread.new { register(registry) } }.map(&:value)

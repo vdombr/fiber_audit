@@ -7,7 +7,7 @@ require_relative 'validation'
 
 module FiberAudit
   module Runtime
-    # Bounded process-local registry shared by the watchdog and future probes.
+    # Bounded process-local registry shared by runtime observers.
     class ActiveOperations
       MAX_ENTRIES = 10_000
       MAX_SNAPSHOT = 100
@@ -23,6 +23,20 @@ module FiberAudit
         :started_monotonic_ns,
         :scheduler_snapshot
       )
+      Snapshot = Data.define(:entries, :total_count) do
+        def initialize(entries:, total_count:)
+          unless entries.is_a?(Array) && entries.all?(Entry)
+            raise RuntimeContractError, 'snapshot entries must be ActiveOperations::Entry values'
+          end
+
+          super(
+            entries: entries.dup.freeze,
+            total_count: Validation.integer(total_count, 'active operation total count')
+          )
+        end
+
+        def truncated? = total_count > entries.size
+      end
 
       def initialize(pid_source: Process.method(:pid), capacity: MAX_ENTRIES, snapshot_limit: MAX_SNAPSHOT)
         validate_source!(pid_source)
@@ -77,13 +91,16 @@ module FiberAudit
         @mutex.synchronize { @entries.delete(handle) }
       end
 
-      def snapshot(thread_id: nil)
+      def snapshot(thread_id: nil) = snapshot_with_metadata(thread_id: thread_id).entries
+
+      def snapshot_with_metadata(thread_id: nil)
         ensure_current_process!
         normalized_thread_id = Validation.integer(thread_id, 'thread_id', allow_nil: true)
         @mutex.synchronize do
           entries = @entries.values
           entries = entries.select { |entry| entry.thread_id == normalized_thread_id } if normalized_thread_id
-          entries.sort_by(&:sequence).first(@snapshot_limit).freeze
+          ordered = entries.sort_by(&:sequence)
+          Snapshot.new(entries: ordered.first(@snapshot_limit), total_count: ordered.size)
         end
       end
 
@@ -107,8 +124,6 @@ module FiberAudit
           raise RuntimeContractError, 'thread and fiber identities are invalid'
         end
 
-        normalized_snapshot = normalize_scheduler_snapshot(scheduler_snapshot)
-
         {
           thread_id: Validation.integer(thread.object_id, 'thread_id'),
           fiber_id: Validation.integer(fiber.object_id, 'fiber_id'),
@@ -116,13 +131,12 @@ module FiberAudit
           location: location,
           execution_context: normalized_context,
           started_monotonic_ns: Validation.integer(monotonic_ns, 'monotonic_ns'),
-          scheduler_snapshot: normalized_snapshot
+          scheduler_snapshot: normalize_scheduler_snapshot(scheduler_snapshot)
         }
       end
 
       def normalize_scheduler_snapshot(value)
-        return value if value.nil?
-        return value if value.is_a?(SchedulerSnapshot)
+        return value if value.nil? || value.is_a?(SchedulerSnapshot)
 
         raise RuntimeContractError, 'scheduler_snapshot must be a FiberAudit::Runtime::SchedulerSnapshot or nil'
       end
@@ -147,7 +161,9 @@ module FiberAudit
       end
 
       def validate_source!(source)
-        raise RuntimeContractError, 'pid_source must respond to call' unless source.respond_to?(:call)
+        return if source.respond_to?(:call)
+
+        raise RuntimeContractError, 'pid_source must respond to call'
       end
 
       def validate_limit!(value, name, maximum)

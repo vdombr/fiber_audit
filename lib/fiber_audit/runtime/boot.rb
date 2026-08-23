@@ -25,9 +25,13 @@ module FiberAudit
           watchdog_policy = if environment.key?(Environment::WATCHDOG_SETTINGS_KEY)
                               Environment.load_watchdog_policy(environment)
                             end
+          operation_liveness_policy = if environment.key?(Environment::OPERATION_LIVENESS_SETTINGS_KEY)
+                                        Environment.load_operation_liveness_policy(environment)
+                                      end
           @lifecycle = Lifecycle.start(
             settings: settings,
             watchdog_policy: watchdog_policy,
+            operation_liveness_policy: operation_liveness_policy,
             probes_enabled: Environment.probes_enabled?(environment),
             clock: clock,
             session_id_source: session_id_source,

@@ -9,7 +9,7 @@ require 'fiber_audit/runtime/environment'
 RSpec.describe 'FiberAudit runtime boot' do
   let(:launch_id) { '123e4567-e89b-42d3-a456-426614174000' }
 
-  def activation_environment(root, output, fail_open: true, watchdog: nil, probes: false)
+  def activation_environment(root, output, fail_open: true, watchdog: nil, liveness: nil, probes: false)
     policy = FiberAudit::Runtime::Policy.new(sampling_rate: 1.0, fail_open: fail_open)
     settings = FiberAudit::Runtime::Environment.build(
       policy: policy,
@@ -20,6 +20,7 @@ RSpec.describe 'FiberAudit runtime boot' do
     FiberAudit::Runtime::Environment.child_environment(
       settings: settings,
       watchdog_policy: watchdog,
+      operation_liveness_policy: liveness,
       probes_enabled: probes
     )
   end
@@ -348,6 +349,59 @@ RSpec.describe 'FiberAudit runtime boot' do
         fail_open: false,
         watchdog: FiberAudit::Runtime::WatchdogPolicy.new
       ).merge(FiberAudit::Runtime::Environment::WATCHDOG_SETTINGS_KEY => 'malformed')
+      _stdout, _stderr, status = run_child(closed_environment, 'puts "must not run"')
+      expect(status).not_to be_success
+    end
+  end
+
+  it 'records active and disabled liveness states only with explicit probe activation' do
+    Dir.mktmpdir do |root|
+      output = File.join(root, 'runtime')
+      Dir.mkdir(output)
+      enabled = FiberAudit::Runtime::OperationLivenessPolicy.new
+      disabled = FiberAudit::Runtime::OperationLivenessPolicy::DISABLED
+
+      [enabled, disabled].each do |policy|
+        _stdout, stderr, status = run_child(
+          activation_environment(root, output, liveness: policy, probes: true),
+          'exit 0'
+        )
+        expect(status).to be_success, stderr
+      end
+      _stdout, stderr, status = run_child(
+        activation_environment(root, output, liveness: enabled, probes: false),
+        'exit 0'
+      )
+      expect(status).to be_success, stderr
+
+      _files, sessions = session_records(output)
+      event_kinds = sessions.map do |records|
+        records.filter_map { |record| record.dig('payload', 'kind') if record['record_type'] == 'event' }
+      end
+      expect(event_kinds).to include(
+        ['operation_liveness_active'],
+        ['operation_liveness_disabled'],
+        []
+      )
+    end
+  end
+
+  it 'honors fail-open and fail-closed modes for malformed liveness activation' do
+    Dir.mktmpdir do |root|
+      output = File.join(root, 'runtime')
+      Dir.mkdir(output)
+      policy = FiberAudit::Runtime::OperationLivenessPolicy.new
+
+      open_environment = activation_environment(
+        root, output, liveness: policy, probes: true
+      ).merge(FiberAudit::Runtime::Environment::OPERATION_LIVENESS_SETTINGS_KEY => 'malformed')
+      stdout, stderr, status = run_child(open_environment, 'puts "ran"')
+      expect(status).to be_success, stderr
+      expect(stdout).to eq("ran\n")
+
+      closed_environment = activation_environment(
+        root, output, fail_open: false, liveness: policy, probes: true
+      ).merge(FiberAudit::Runtime::Environment::OPERATION_LIVENESS_SETTINGS_KEY => 'malformed')
       _stdout, _stderr, status = run_child(closed_environment, 'puts "must not run"')
       expect(status).not_to be_success
     end

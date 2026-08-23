@@ -9,7 +9,12 @@ require 'fiber_audit/runtime/environment'
 RSpec.describe 'targeted runtime probe integration' do
   let(:launch_id) { '123e4567-e89b-42d3-a456-426614174000' }
 
-  def activation_environment(root, output, watchdog: FiberAudit::Runtime::WatchdogPolicy.new(enabled: false))
+  def activation_environment(
+    root,
+    output,
+    watchdog: FiberAudit::Runtime::WatchdogPolicy.new(enabled: false),
+    liveness: nil
+  )
     policy = FiberAudit::Runtime::Policy.new(
       sampling_rate: 1.0,
       max_events_per_second: 1_000,
@@ -24,6 +29,7 @@ RSpec.describe 'targeted runtime probe integration' do
     FiberAudit::Runtime::Environment.child_environment(
       settings: settings,
       watchdog_policy: watchdog,
+      operation_liveness_policy: liveness,
       probes_enabled: true
     )
   end
@@ -122,6 +128,113 @@ RSpec.describe 'targeted runtime probe integration' do
       expect(overlap.dig('payload', 'measurements', 'operation_sequence'))
         .to eq(operation.dig('payload', 'measurements', 'operation_sequence'))
       expect(records.count { |record| record.dig('payload', 'kind') == 'scheduler_stall_completed' }).to eq(1)
+    end
+  end
+
+  it 'observes a long active operation while scheduler heartbeats remain healthy' do
+    scheduler_source = <<~RUBY
+      class HealthyScheduler
+        def initialize = @waiting = []
+
+        def fiber(&block)
+          fiber = Fiber.new(blocking: false, &block)
+          fiber.resume
+          fiber
+        end
+
+        def kernel_sleep(duration = nil)
+          @waiting << [monotonic + (duration || 0), Fiber.current]
+          Fiber.yield
+          0
+        end
+
+        def io_wait(_io, _events, timeout = nil)
+          kernel_sleep(timeout || 0.001)
+          0
+        end
+
+        def block(_blocker, timeout = nil)
+          kernel_sleep(timeout || 0.001)
+          true
+        end
+
+        def unblock(_blocker, fiber)
+          fiber.resume if fiber.alive?
+        end
+
+        def run_for(duration)
+          deadline = monotonic + duration
+          while monotonic < deadline
+            drain_ready
+            ::Kernel.sleep(0.001)
+          end
+          drain_ready
+        end
+
+        def close
+          until @waiting.empty?
+            drain_ready
+            break if @waiting.empty?
+
+            delay = @waiting.map(&:first).min - monotonic
+            ::Kernel.sleep(delay) if delay.positive?
+          end
+        end
+
+        private
+
+        def drain_ready
+          ready, @waiting = @waiting.partition { |deadline, _fiber| deadline <= monotonic }
+          ready.each { |_deadline, fiber| fiber.resume if fiber.alive? }
+        end
+
+        def monotonic = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      end
+
+      scheduler = HealthyScheduler.new
+      Fiber.set_scheduler(scheduler)
+      Fiber.schedule { Mutex.new.synchronize { sleep 0.08 } }
+      scheduler.run_for(0.12)
+    RUBY
+
+    Dir.mktmpdir do |root|
+      output = File.join(root, 'runtime')
+      Dir.mkdir(output)
+      scenario = File.join(root, 'healthy_liveness_scenario.rb')
+      File.write(scenario, scheduler_source)
+      watchdog = FiberAudit::Runtime::WatchdogPolicy.new(
+        heartbeat_interval_ms: 10,
+        stall_threshold_ms: 50,
+        max_frames: 0
+      )
+      liveness = FiberAudit::Runtime::OperationLivenessPolicy.new(
+        poll_interval_ms: 5,
+        long_active_threshold_ms: 20
+      )
+
+      _stdout, stderr, status = run_file(
+        activation_environment(root, output, watchdog: watchdog, liveness: liveness),
+        scenario
+      )
+      records = sessions(output).first.last
+      kinds = records.filter_map { |record| record.dig('payload', 'kind') }
+      starts = records.select do |record|
+        record.dig('payload', 'kind') == 'operation_long_active_started' &&
+          record.dig('payload', 'operation') == 'Mutex#synchronize'
+      end
+      completions = records.select do |record|
+        record.dig('payload', 'kind') == 'operation_long_active_completed' &&
+          record.dig('payload', 'operation') == 'Mutex#synchronize'
+      end
+
+      expect(status).to be_success, stderr
+      expect(kinds).to include('watchdog_active', 'operation_liveness_active')
+      expect(kinds).not_to include('scheduler_stall_started')
+      expect(starts.size).to eq(1)
+      expect(completions.size).to eq(1)
+      expect(completions.first.dig('payload', 'measurements', 'operation_finished')).to be(true)
+      expect(completions.first.dig('payload', 'measurements', 'long_active_sequence'))
+        .to eq(starts.first.dig('payload', 'measurements', 'long_active_sequence'))
     end
   end
 
