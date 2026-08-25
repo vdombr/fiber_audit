@@ -78,6 +78,33 @@ RSpec.describe FiberAudit::Runtime::Probes::Synchronization do
     expect(observed.count('MonitorMixin#synchronize')).to eq(1)
   end
 
+  it 'records balanced graph transitions and leaves no ownership after a mutex scope' do
+    @runtime = start_probe_runtime(
+      synchronization_graph_policy: FiberAudit::Runtime::SynchronizationGraphPolicy.new(enabled: true)
+    )
+    mutex = Mutex.new
+
+    expect(mutex.synchronize { :value }).to eq(:value)
+
+    kinds = graph_events(@runtime).filter_map { |record| record.dig('payload', 'kind') }
+    expect(kinds).to include('sync_wait_started', 'sync_wait_completed', 'sync_acquired', 'sync_released')
+    expect(@runtime.synchronization_graph.snapshot.waits).to be_empty
+  end
+
+  it 'restores condition ownership and clears the wait edge after timeout' do
+    @runtime = start_probe_runtime(
+      synchronization_graph_policy: FiberAudit::Runtime::SynchronizationGraphPolicy.new(enabled: true)
+    )
+    mutex = Mutex.new
+    condition = ConditionVariable.new
+
+    mutex.synchronize { condition.wait(mutex, 0.001) }
+
+    expect(@runtime.synchronization_graph.snapshot.waits).to be_empty
+    expect(graph_events(@runtime).map { |record| record.dig('payload', 'operation') })
+      .to include('ConditionVariable#wait')
+  end
+
   it 'preserves non-local block control flow' do
     @runtime = start_probe_runtime
 

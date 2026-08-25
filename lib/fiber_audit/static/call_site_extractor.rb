@@ -2,6 +2,7 @@
 
 require 'prism'
 require_relative 'call_site'
+require_relative 'fiber_context'
 
 module FiberAudit
   module Static
@@ -44,6 +45,7 @@ module FiberAudit
         Net::SMTP
         Net::FTP
         Net::IMAP
+        Fiber
       ].to_set.freeze
 
       def initialize(files:, semantic_index: nil)
@@ -120,6 +122,7 @@ module FiberAudit
           @source = source
           @semantic_index = semantic_index
           @call_sites = []
+          @fiber_context_stack = []
 
           # Scope tracking stacks
           @nesting_stack = []        # Array of constant names (class/module nesting)
@@ -227,14 +230,70 @@ module FiberAudit
         # --- Call node visitor ---
 
         def visit_call(node)
-          # Extract call site with local assignment tracking (no ivars on nodes)
-          call_site = build_call_site(node)
+          own_context = blocking_fiber_context(node)
+          call_site = build_call_site(node, fiber_context: own_context || @fiber_context_stack.last)
           @call_sites << call_site if call_site
 
-          # Recurse into receiver, arguments, and attached block body.
           visit(node.receiver) if node.receiver
           visit(node.arguments) if node.arguments
-          visit(node.block) if node.block
+          visit_attached_block(node.block, own_context) if node.block
+        end
+
+        def visit_attached_block(block, context)
+          unless context
+            visit(block)
+            return
+          end
+
+          @fiber_context_stack.push(context)
+          visit(block)
+        ensure
+          @fiber_context_stack.pop if context
+        end
+
+        def blocking_fiber_context(node)
+          return unless node.block && direct_fiber_receiver?(node.receiver)
+
+          kind = if node.name == :blocking
+                   :fiber_blocking
+                 elsif node.name == :new && literal_blocking_true?(node.arguments)
+                   :fiber_new
+                 end
+          return unless kind
+          return if workspace_constant?('Fiber')
+
+          FiberContext.new(kind: kind, line: node.location.start_line, column: node.location.start_column)
+        rescue StandardError
+          nil
+        end
+
+        def direct_fiber_receiver?(receiver)
+          return false unless receiver.is_a?(Prism::ConstantReadNode) || receiver.is_a?(Prism::ConstantPathNode)
+
+          extract_constant_from_node(receiver) == 'Fiber'
+        end
+
+        def literal_blocking_true?(arguments)
+          return false unless arguments
+
+          arguments.arguments.any? do |argument|
+            next false unless argument.is_a?(Prism::KeywordHashNode)
+
+            argument.elements.any? do |element|
+              element.is_a?(Prism::AssocNode) &&
+                element.key.is_a?(Prism::SymbolNode) &&
+                element.key.unescaped == 'blocking' &&
+                element.value.is_a?(Prism::TrueNode)
+            end
+          end
+        end
+
+        def workspace_constant?(name)
+          return false unless @semantic_index.respond_to?(:resolve_constant)
+
+          !@semantic_index.resolve_constant(name, nesting: @nesting_stack.dup).nil?
+        rescue StandardError
+          false
         end
 
         def visit_assignment(node)
@@ -311,7 +370,7 @@ module FiberAudit
 
         # --- Call site building ---
 
-        def build_call_site(node)
+        def build_call_site(node, fiber_context: @fiber_context_stack.last)
           receiver_source = extract_receiver_source(node)
           method_name = node.name
           arguments = extract_arguments(node)
@@ -334,7 +393,8 @@ module FiberAudit
             nesting: nesting,
             execution_context: nil,
             resolution: resolution,
-            confidence: confidence
+            confidence: confidence,
+            fiber_context: fiber_context
           )
         end
 

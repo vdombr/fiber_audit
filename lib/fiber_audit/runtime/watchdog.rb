@@ -337,10 +337,12 @@ module FiberAudit
         }
 
         measurements.merge!(entry.scheduler_snapshot.to_measurements) if entry.scheduler_snapshot
+        measurements.merge!(entry.invocation_measurements)
         measurements.merge!(
           SchedulerEvidenceClassifier.measurements(
             operation: entry.operation,
-            scheduler_snapshot: entry.scheduler_snapshot
+            scheduler_snapshot: entry.scheduler_snapshot,
+            invocation_measurements: entry.invocation_measurements
           )
         )
         measurements

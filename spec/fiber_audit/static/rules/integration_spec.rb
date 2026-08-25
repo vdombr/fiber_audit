@@ -11,7 +11,8 @@ RSpec.describe 'Wave R3 rule integration' do
     'FA1004' => [FiberAudit::Static::Rules::ThreadCurrentState, 4],
     'FA1005' => [FiberAudit::Static::Rules::IOSelect, 4],
     'FA1006' => [FiberAudit::Static::Rules::DirectSocket, 7],
-    'FA1007' => [FiberAudit::Static::Rules::NetHTTPInRequest, 10]
+    'FA1007' => [FiberAudit::Static::Rules::NetHTTPInRequest, 10],
+    'FA1008' => [FiberAudit::Static::Rules::BlockingFiberContext, 4]
   }.freeze
 
   rule_cases.each do |rule_id, (rule_class, expected_count)|

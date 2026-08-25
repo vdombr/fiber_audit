@@ -14,11 +14,34 @@ RSpec.describe FiberAudit::Runtime::Session do
     )
   end
 
-  it 'defines the exact immutable session contract' do
+  it 'defines the exact immutable versioned session contract' do
     expect(described_class.members).to eq(%i[
-                                            id started_at started_monotonic_ns policy tool_version ruby_version
+                                            id started_at started_monotonic_ns schema_version process_role
+                                            policy tool_version ruby_version
                                           ])
     expect(build_session).to be_frozen
+  end
+
+  it 'defaults to JSONL 1.1 audited-process sessions' do
+    session = build_session
+    expect(session.schema_version).to eq('1.1')
+    expect(session.process_role).to eq(:audited_process)
+    expect(session.tool_version).to eq(FiberAudit::VERSION)
+    expect(session.ruby_version).to eq(RUBY_VERSION)
+    expect(session.started_at.utc?).to be(true)
+    expect(session.policy).to be_a(FiberAudit::Runtime::Policy)
+  end
+
+  it 'accepts explicit 1.0 and parent-monitor 1.1 sessions' do
+    expect(build_session(schema_version: '1.0').process_role).to eq(:audited_process)
+    expect(build_session(process_role: :parent_monitor).schema_version).to eq('1.1')
+  end
+
+  it 'rejects unsupported versions, roles, and a parent role under 1.0' do
+    expect { build_session(schema_version: '2.0') }.to raise_error(FiberAudit::RuntimeContractError, /schema_version/)
+    expect { build_session(process_role: :worker) }.to raise_error(FiberAudit::RuntimeContractError, /process_role/)
+    expect { build_session(schema_version: '1.0', process_role: :parent_monitor) }
+      .to raise_error(FiberAudit::RuntimeContractError, /1\.0 sessions/)
   end
 
   it 'uses version defaults and normalizes time to UTC' do

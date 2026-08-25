@@ -75,6 +75,21 @@ RSpec.describe FiberAudit::Runtime::Probes::Socket do
     end
   end
 
+  it 'derives endpoint applicability without retaining endpoint values' do
+    expect(described_class.endpoint_measurements('TCPSocket.new', ['127.0.0.1', 443]))
+      .to eq(endpoint_resolution_applicable: false)
+    expect(described_class.endpoint_measurements('TCPSocket.new', ['privacy-sentinel.example', 443]))
+      .to eq(endpoint_resolution_applicable: true)
+    expect(described_class.endpoint_measurements('TCPSocket.new', ['2001:db8::1', 443]))
+      .to eq(endpoint_resolution_applicable: nil)
+    expect(described_class.endpoint_measurements('TCPServer.new', [443]))
+      .to eq(endpoint_resolution_applicable: false)
+    expect(described_class.endpoint_measurements('Socket.new', [Socket::AF_INET, Socket::SOCK_STREAM, 0]))
+      .to eq({})
+    expect(described_class.endpoint_measurements('TCPSocket.new', ['privacy-sentinel.example', 443]).to_s)
+      .not_to include('privacy-sentinel')
+  end
+
   it 'records the exact IPSocket constructor failure without changing it' do
     @runtime = start_probe_runtime
 

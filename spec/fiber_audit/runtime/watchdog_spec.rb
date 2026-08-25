@@ -398,6 +398,8 @@ RSpec.describe FiberAudit::Runtime::Watchdog do
       heartbeat = attach_heartbeat(watchdog)
       snapshot = FiberAudit::Runtime::SchedulerSnapshot.new(
         scheduler_present: true,
+        current_scheduler_present: true,
+        scheduler_snapshot_consistent: true,
         fiber_blocking: false,
         scheduler_io_select_supported: false
       )
@@ -406,7 +408,8 @@ RSpec.describe FiberAudit::Runtime::Watchdog do
         location: FiberAudit::Runtime::Location.new(path: 'app/io.rb', line: 5),
         execution_context: :request,
         monotonic_ns: 20,
-        scheduler_snapshot: snapshot
+        scheduler_snapshot: snapshot,
+        invocation_measurements: { timeout_present: true, timeout_zero: false }
       )
 
       watchdog.poll(now_ns: 100_000_011)
@@ -415,8 +418,10 @@ RSpec.describe FiberAudit::Runtime::Watchdog do
       expect(overlap.fetch('measurements')).to include(
         'operation_wait_possible' => true,
         'operation_inventory_only' => false,
-        'operation_scheduler_capability_required' => true,
-        'operation_scheduler_capability_supported' => false,
+        'operation_core_capability_required' => false,
+        'operation_optional_capability_required' => true,
+        'operation_optional_capability_applicable' => true,
+        'operation_optional_capability_supported' => false,
         'operation_scheduler_cooperation_available' => false
       )
     ensure

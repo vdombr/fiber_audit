@@ -102,12 +102,15 @@ module FiberAudit
         settings: settings,
         watchdog_policy: configuration.runtime_watchdog_policy,
         operation_liveness_policy: configuration.runtime_operation_liveness_policy,
+        synchronization_graph_policy: configuration.runtime_synchronization_graph_policy,
         probes_enabled: true
       )
       Runtime::Supervisor.new(
         command: command,
         environment: environment,
-        cwd: project.invocation_path
+        cwd: project.invocation_path,
+        settings: settings,
+        process_progress_policy: configuration.runtime_process_progress_policy
       ).run
     end
 
@@ -204,7 +207,9 @@ module FiberAudit
         suppressions_path: configuration.suppressions_path,
         runtime_policy: configuration.runtime_policy,
         runtime_watchdog_policy: configuration.runtime_watchdog_policy,
-        runtime_operation_liveness_policy: configuration.runtime_operation_liveness_policy
+        runtime_operation_liveness_policy: configuration.runtime_operation_liveness_policy,
+        runtime_synchronization_graph_policy: configuration.runtime_synchronization_graph_policy,
+        runtime_process_progress_policy: configuration.runtime_process_progress_policy
       )
     end
 
@@ -319,6 +324,8 @@ module FiberAudit
       when 'FA1007'
         rule_class::NET_HTTP_METHODS.map { |method| "Net::HTTP.#{method}" } +
           rule_class::URI_METHODS.map { |constant, method| "#{constant}.#{method}" }
+      when 'FA1008'
+        rule_class::OPERATIONS
       else
         []
       end

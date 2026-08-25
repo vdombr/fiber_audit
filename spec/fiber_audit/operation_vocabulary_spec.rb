@@ -9,6 +9,7 @@ require 'fiber_audit/static/rules/thread_current_state'
 require 'fiber_audit/static/rules/io_select'
 require 'fiber_audit/static/rules/direct_socket'
 require 'fiber_audit/static/rules/net_http_in_request'
+require 'fiber_audit/static/rules/blocking_fiber_context'
 
 RSpec.describe FiberAudit::OperationVocabulary do
   it 'is the unchanged canonical source for FA1001 through FA1007' do
@@ -21,6 +22,16 @@ RSpec.describe FiberAudit::OperationVocabulary do
     expect(FiberAudit::Static::Rules::DirectSocket::EXACT).to equal(described_class::FA1006_EXACT)
     expect(FiberAudit::Static::Rules::NetHTTPInRequest::NET_HTTP_METHODS)
       .to equal(described_class::FA1007_NET_HTTP_METHODS)
+  end
+
+  it 'owns the canonical FA1008 static operation names' do
+    expect(described_class::FA1008_OPERATIONS).to eq(
+      fiber_new: 'Fiber.new(blocking: true)', fiber_blocking: 'Fiber.blocking'
+    )
+    expect(FiberAudit::Static::Rules::BlockingFiberContext::OPERATIONS)
+      .to eq(described_class::FA1008_OPERATIONS.values)
+    expect(FiberAudit::OperationSemantics.resolve('Fiber.new(blocking: true)'))
+      .to have_attributes(category: :fiber_context, wait_possible: false, inventory_only: true)
   end
 
   it 'still defines FA1004_INDEX_METHODS for runtime vocabulary (even though static rule does not detect them)' do

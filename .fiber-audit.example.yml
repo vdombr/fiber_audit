@@ -48,4 +48,19 @@ runtime:
     enabled: true
     poll_interval_ms: 100
     long_active_threshold_ms: 1000
+  # Optional bounded ownership/wait graph. Disabled by default.
+  synchronization_graph:
+    enabled: false
+    max_identities: 4096
+    max_resources: 2048
+    max_wait_edges: 2048
+    max_cycle_depth: 64
+  # Optional parent-observed process progress. Disabled by default.
+  process_progress:
+    enabled: false
+    heartbeat_interval_ms: 50
+    stall_threshold_ms: 250
+    max_processes: 1024
+    max_frames_per_poll: 256
+    max_buffer_bytes: 65536
   fail_open: true

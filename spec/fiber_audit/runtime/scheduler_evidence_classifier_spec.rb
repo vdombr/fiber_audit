@@ -3,94 +3,110 @@
 require 'fiber_audit/runtime/scheduler_evidence_classifier'
 
 RSpec.describe FiberAudit::Runtime::SchedulerEvidenceClassifier do
-  def snapshot(scheduler_present:, fiber_blocking:, process_wait: nil)
+  def snapshot(scheduler_present:, fiber_blocking:, consistent: true, **capabilities)
     FiberAudit::Runtime::SchedulerSnapshot.new(
       scheduler_present: scheduler_present,
+      current_scheduler_present: scheduler_present,
+      scheduler_snapshot_consistent: consistent,
       fiber_blocking: fiber_blocking,
-      scheduler_process_wait_supported: process_wait
+      **capabilities
     )
   end
 
-  it 'classifies scheduler absence and unknown snapshots without inventing support' do
-    absent = described_class.measurements(
-      operation: 'Process.wait',
-      scheduler_snapshot: snapshot(scheduler_present: false, fiber_blocking: nil)
-    )
-    unknown = described_class.measurements(
-      operation: 'Process.wait',
-      scheduler_snapshot: snapshot(scheduler_present: nil, fiber_blocking: nil)
-    )
-
-    expect(absent).to include(
-      operation_wait_possible: true,
-      operation_scheduler_capability_required: true,
-      operation_scheduler_capability_supported: nil,
-      operation_scheduler_cooperation_available: false
-    )
-    expect(unknown.values_at(
-             :operation_scheduler_capability_supported,
-             :operation_scheduler_cooperation_available
-           )).to eq([nil, nil])
-  end
-
-  it 'distinguishes a blocking Fiber and optional hook presence or absence' do
-    blocking = described_class.measurements(
-      operation: 'Process.wait',
-      scheduler_snapshot: snapshot(scheduler_present: true, fiber_blocking: true, process_wait: true)
-    )
-    supported = described_class.measurements(
-      operation: 'Process.wait',
-      scheduler_snapshot: snapshot(scheduler_present: true, fiber_blocking: false, process_wait: true)
-    )
-    missing = described_class.measurements(
-      operation: 'Process.wait',
-      scheduler_snapshot: snapshot(scheduler_present: true, fiber_blocking: false, process_wait: false)
-    )
-
-    expect(blocking[:operation_scheduler_cooperation_available]).to be(false)
-    expect(supported[:operation_scheduler_cooperation_available]).to be(true)
-    expect(missing[:operation_scheduler_cooperation_available]).to be(false)
-  end
-
-  it 'maps required coordination hooks to known scheduler presence' do
+  it 'makes zero-timeout select polling inapplicable' do
     measurements = described_class.measurements(
-      operation: 'ConditionVariable#wait',
-      scheduler_snapshot: snapshot(scheduler_present: true, fiber_blocking: false)
+      operation: 'IO.select',
+      scheduler_snapshot: snapshot(scheduler_present: true, fiber_blocking: false,
+                                   scheduler_io_select_supported: false),
+      invocation_measurements: { timeout_present: true, timeout_zero: true }
     )
-
     expect(measurements).to include(
-      operation_scheduler_capability_required: true,
-      operation_scheduler_capability_supported: true,
+      operation_optional_capability_required: true,
+      operation_optional_capability_applicable: false,
+      operation_optional_capability_supported: nil,
       operation_scheduler_cooperation_available: true
     )
   end
 
-  it 'keeps inventory-only and unmeasured capability evidence explicit' do
-    inventory = described_class.measurements(operation: 'Kernel.spawn', scheduler_snapshot: nil)
-    stream = described_class.measurements(
-      operation: 'IO.popen',
-      scheduler_snapshot: snapshot(scheduler_present: true, fiber_blocking: false)
+  it 'classifies core and optional requirements independently' do
+    measurements = described_class.measurements(
+      operation: 'Net::HTTP.request',
+      scheduler_snapshot: snapshot(scheduler_present: true, fiber_blocking: false,
+                                   scheduler_io_wait_supported: true,
+                                   scheduler_address_resolve_supported: true),
+      invocation_measurements: { endpoint_resolution_applicable: true }
     )
+    expect(measurements).to include(
+      operation_core_capability_required: true,
+      operation_core_capability_supported: true,
+      operation_optional_capability_required: true,
+      operation_optional_capability_applicable: true,
+      operation_optional_capability_supported: true,
+      operation_scheduler_cooperation_available: true
+    )
+    expect(measurements).to be_frozen
+  end
 
-    expect(inventory).to include(
-      operation_wait_possible: false,
-      operation_inventory_only: true,
-      operation_scheduler_capability_required: false,
-      operation_scheduler_cooperation_available: nil
+  it 'does not require an inapplicable optional capability' do
+    measurements = described_class.measurements(
+      operation: 'Net::HTTP.request',
+      scheduler_snapshot: snapshot(scheduler_present: true, fiber_blocking: false,
+                                   scheduler_io_wait_supported: true,
+                                   scheduler_address_resolve_supported: false),
+      invocation_measurements: { endpoint_resolution_applicable: false }
     )
-    expect(stream).to include(
-      operation_wait_possible: true,
-      operation_inventory_only: false,
-      operation_scheduler_capability_required: false,
-      operation_scheduler_capability_supported: nil,
+    expect(measurements).to include(
+      operation_optional_capability_applicable: false,
+      operation_optional_capability_supported: nil,
+      operation_scheduler_cooperation_available: true
+    )
+  end
+
+  it 'keeps conditional applicability unknown until invocation evidence exists' do
+    measurements = described_class.measurements(
+      operation: 'Net::HTTP.request',
+      scheduler_snapshot: snapshot(scheduler_present: true, fiber_blocking: false,
+                                   scheduler_io_wait_supported: true,
+                                   scheduler_address_resolve_supported: true)
+    )
+    expect(measurements).to include(
+      operation_optional_capability_applicable: nil,
+      operation_optional_capability_supported: nil,
       operation_scheduler_cooperation_available: nil
     )
   end
 
-  it 'returns all-unknown semantic measurements for an unknown operation' do
-    measurements = described_class.measurements(operation: 'Project.perform', scheduler_snapshot: nil)
+  it 'never promotes an inconsistent snapshot to cooperation' do
+    measurements = described_class.measurements(
+      operation: 'Mutex#lock',
+      scheduler_snapshot: snapshot(scheduler_present: true, fiber_blocking: false, consistent: false,
+                                   scheduler_block_supported: true)
+    )
+    expect(measurements[:operation_core_capability_supported]).to be(true)
+    expect(measurements[:operation_scheduler_cooperation_available]).to be_nil
+  end
 
-    expect(measurements.values).to all(be_nil)
-    expect(measurements).to be_frozen
+  it 'distinguishes absence, blocking Fibers, missing support, and unknown state' do
+    absent = described_class.measurements(operation: 'Process.wait',
+                                          scheduler_snapshot: snapshot(
+                                            scheduler_present: false, fiber_blocking: true
+                                          ))
+    blocking = described_class.measurements(operation: 'Process.wait',
+                                            scheduler_snapshot: snapshot(scheduler_present: true, fiber_blocking: true,
+                                                                         scheduler_process_wait_supported: true))
+    unsupported = described_class.measurements(operation: 'Process.wait',
+                                               scheduler_snapshot: snapshot(scheduler_present: true, fiber_blocking: false,
+                                                                            scheduler_process_wait_supported: false))
+    unknown = described_class.measurements(operation: 'Process.wait', scheduler_snapshot: nil)
+
+    expect(absent[:operation_scheduler_cooperation_available]).to be(false)
+    expect(blocking[:operation_scheduler_cooperation_available]).to be(false)
+    expect(unsupported[:operation_scheduler_cooperation_available]).to be(false)
+    expect(unknown[:operation_scheduler_cooperation_available]).to be_nil
+  end
+
+  it 'returns all-unknown measurements for an unknown operation' do
+    expect(described_class.measurements(operation: 'Project.perform', scheduler_snapshot: nil).values)
+      .to all(be_nil)
   end
 end

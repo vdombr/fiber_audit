@@ -217,7 +217,12 @@ module FiberAudit
       end
 
       def prepare_event(event)
-        record = JSONL::Schema.event_record(session_id: session.id, sequence: @sequence, event: event)
+        record = JSONL::Schema.event_record(
+          session_id: session.id,
+          sequence: @sequence,
+          event: event,
+          schema_version: session.schema_version
+        )
         writer.prepare(record)
       rescue RuntimeSafetyError
         @limits.drop!(:oversize)
@@ -257,7 +262,12 @@ module FiberAudit
       def write_end_record(summary)
         return [] unless @start_written && writer.active?
 
-        record = JSONL::Schema.end_record(session_id: session.id, sequence: @sequence, summary: summary)
+        record = JSONL::Schema.end_record(
+          session_id: session.id,
+          sequence: @sequence,
+          summary: summary,
+          schema_version: session.schema_version
+        )
         line = writer.prepare(record)
         if line.bytesize > @end_reserve_bytes
           raise RuntimeSafetyError, 'runtime session end record exceeded its reserved bytes'
@@ -320,7 +330,12 @@ module FiberAudit
           oversize: outcome,
           internal_errors: MAX_COUNTER
         )
-        record = JSONL::Schema.end_record(session_id: session.id, sequence: MAX_COUNTER, summary: summary)
+        record = JSONL::Schema.end_record(
+          session_id: session.id,
+          sequence: MAX_COUNTER,
+          summary: summary,
+          schema_version: session.schema_version
+        )
         writer.prepare(record).bytesize
       end
 

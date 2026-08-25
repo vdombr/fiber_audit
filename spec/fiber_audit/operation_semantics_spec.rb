@@ -51,6 +51,37 @@ RSpec.describe FiberAudit::OperationSemantics do
     expect(unknown.inventory_only).to be_nil
   end
 
+  it 'models immutable core, optional, and conditional capability requirements' do
+    core = described_class::CapabilityRequirement.new(name: :io_wait, kind: :core)
+    conditional = described_class::CapabilityRequirement.new(name: :address_resolve, kind: :optional,
+                                                             applicability: :conditional)
+    profile = described_class::Profile.new(category: :http_io, wait_possible: true,
+                                           inventory_only: false, capabilities: [core, conditional])
+
+    expect(profile.capabilities).to eq([core, conditional])
+    expect(profile.capabilities).to be_frozen
+    expect(profile.core_capabilities).to eq([core])
+    expect(profile.optional_capabilities).to eq([conditional])
+    expect(conditional).to be_conditional
+  end
+
+  it 'assigns multi-stage requirements only where operation semantics are known' do
+    expect(described_class.resolve('IO.select').optional_capabilities.first).to be_conditional
+    expect(described_class.resolve('Net::HTTP.request').core_capabilities.map(&:name)).to eq([:io_wait])
+    expect(described_class.resolve('Net::HTTP.request').optional_capabilities.map(&:name)).to eq([:address_resolve])
+    expect(described_class.resolve('UNIXSocket.new').optional_capabilities).to be_empty
+  end
+
+  it 'rejects contradictory and duplicate capability requirements' do
+    expect { described_class::CapabilityRequirement.new(name: :io_wait, kind: :optional) }
+      .to raise_error(FiberAudit::RuntimeContractError, /core capability kind/)
+    requirement = described_class::CapabilityRequirement.new(name: :io_wait, kind: :core)
+    expect do
+      described_class::Profile.new(category: :http_io, wait_possible: true, inventory_only: false,
+                                   capabilities: [requirement, requirement])
+    end.to raise_error(FiberAudit::RuntimeContractError, /duplicate/)
+  end
+
   it 'returns immutable profiles and rejects malformed operations and profile fields' do
     expect(described_class.resolve('IO.select')).to be_frozen
     expect { described_class.resolve('') }.to raise_error(FiberAudit::RuntimeContractError)

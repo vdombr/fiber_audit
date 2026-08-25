@@ -15,7 +15,7 @@
   "coverage": {
     "analysed_files": 3,
     "total_call_sites": 22,
-    "rules_run": 7
+    "rules_run": 8
   },
   "findings": [
     {
@@ -218,7 +218,7 @@
             "semantic": "socket_resolve_connect",
             "wait_possible": true,
             "inventory_only": false,
-            "scheduler_capability": "address_resolve"
+            "scheduler_capability": null
           }
         }
       ],

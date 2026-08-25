@@ -7,6 +7,8 @@ require_relative 'findings/severity'
 require_relative 'runtime/policy'
 require_relative 'runtime/watchdog_policy'
 require_relative 'runtime/operation_liveness_policy'
+require_relative 'runtime/synchronization_graph_policy'
+require_relative 'runtime/process_progress_policy'
 
 module FiberAudit
   # rubocop:disable Metrics/ClassLength
@@ -15,7 +17,11 @@ module FiberAudit
     KNOWN_STATIC_KEYS = %w[include exclude suppressions_path].freeze
     KNOWN_REPORT_KEYS = %w[formats min_severity].freeze
     KNOWN_RULE_KEYS = %w[enabled severity].freeze
-    KNOWN_RUNTIME_KEYS = %w[redaction sampling overhead watchdog operation_liveness fail_open].freeze
+    KNOWN_RUNTIME_KEYS = %w[redaction sampling overhead watchdog operation_liveness synchronization_graph process_progress
+                            fail_open].freeze
+    KNOWN_SYNCHRONIZATION_GRAPH_KEYS = %w[enabled max_identities max_resources max_wait_edges max_cycle_depth].freeze
+    KNOWN_PROCESS_PROGRESS_KEYS = %w[enabled heartbeat_interval_ms stall_threshold_ms max_processes max_frames_per_poll
+                                     max_buffer_bytes].freeze
     KNOWN_OPERATION_LIVENESS_KEYS = %w[enabled poll_interval_ms long_active_threshold_ms].freeze
     KNOWN_REDACTION_KEYS = %w[mode].freeze
     KNOWN_SAMPLING_KEYS = %w[rate].freeze
@@ -53,7 +59,8 @@ module FiberAudit
     attr_reader :static_include, :static_exclude, :rules_config,
                 :report_formats, :min_severity, :suppressions_path,
                 :runtime_policy, :runtime_watchdog_policy,
-                :runtime_operation_liveness_policy
+                :runtime_operation_liveness_policy, :runtime_synchronization_graph_policy,
+                :runtime_process_progress_policy
 
     def initialize(
       static_include: DEFAULT_STATIC_INCLUDE,
@@ -64,12 +71,15 @@ module FiberAudit
       suppressions_path: nil,
       runtime_policy: Runtime::Policy.new,
       runtime_watchdog_policy: Runtime::WatchdogPolicy.new,
-      runtime_operation_liveness_policy: Runtime::OperationLivenessPolicy.new
+      runtime_operation_liveness_policy: Runtime::OperationLivenessPolicy.new,
+      runtime_synchronization_graph_policy: Runtime::SynchronizationGraphPolicy::DISABLED,
+      runtime_process_progress_policy: Runtime::ProcessProgressPolicy::DISABLED
     )
       validate_types!(
         static_include, static_exclude, rules_config,
         report_formats, min_severity, suppressions_path, runtime_policy,
-        runtime_watchdog_policy, runtime_operation_liveness_policy
+        runtime_watchdog_policy, runtime_operation_liveness_policy,
+        runtime_synchronization_graph_policy, runtime_process_progress_policy
       )
 
       @static_include = static_include
@@ -81,6 +91,8 @@ module FiberAudit
       @runtime_policy = runtime_policy
       @runtime_watchdog_policy = runtime_watchdog_policy
       @runtime_operation_liveness_policy = runtime_operation_liveness_policy
+      @runtime_synchronization_graph_policy = runtime_synchronization_graph_policy
+      @runtime_process_progress_policy = runtime_process_progress_policy
     end
 
     def rule_enabled?(rule_id)
@@ -119,7 +131,9 @@ module FiberAudit
           suppressions_path: static['suppressions_path'],
           runtime_policy: runtime_policy_from(runtime),
           runtime_watchdog_policy: runtime_watchdog_policy_from(runtime),
-          runtime_operation_liveness_policy: runtime_operation_liveness_policy_from(runtime)
+          runtime_operation_liveness_policy: runtime_operation_liveness_policy_from(runtime),
+          runtime_synchronization_graph_policy: runtime_synchronization_graph_policy_from(runtime),
+          runtime_process_progress_policy: runtime_process_progress_policy_from(runtime)
         )
       end
 
@@ -173,6 +187,8 @@ module FiberAudit
         validate_runtime_mapping!(runtime, 'overhead', KNOWN_OVERHEAD_KEYS)
         validate_runtime_mapping!(runtime, 'watchdog', KNOWN_WATCHDOG_KEYS)
         validate_runtime_mapping!(runtime, 'operation_liveness', KNOWN_OPERATION_LIVENESS_KEYS)
+        validate_runtime_mapping!(runtime, 'synchronization_graph', KNOWN_SYNCHRONIZATION_GRAPH_KEYS)
+        validate_runtime_mapping!(runtime, 'process_progress', KNOWN_PROCESS_PROGRESS_KEYS)
       end
 
       def validate_runtime_mapping!(runtime, key, allowed)
@@ -221,6 +237,37 @@ module FiberAudit
         raise ConfigurationError, "#{path} is invalid: #{e.message}"
       end
 
+      def runtime_synchronization_graph_policy_from(runtime)
+        values = runtime.fetch('synchronization_graph', {})
+        defaults = Runtime::SynchronizationGraphPolicy::DEFAULTS
+        Runtime::SynchronizationGraphPolicy.new(
+          enabled: values.fetch('enabled', defaults[:enabled]),
+          max_identities: values.fetch('max_identities', defaults[:max_identities]),
+          max_resources: values.fetch('max_resources', defaults[:max_resources]),
+          max_wait_edges: values.fetch('max_wait_edges', defaults[:max_wait_edges]),
+          max_cycle_depth: values.fetch('max_cycle_depth', defaults[:max_cycle_depth])
+        )
+      rescue RuntimeContractError => e
+        field = e.message.split.first
+        raise ConfigurationError, "runtime.synchronization_graph.#{field} is invalid: #{e.message}"
+      end
+
+      def runtime_process_progress_policy_from(runtime)
+        values = runtime.fetch('process_progress', {})
+        defaults = Runtime::ProcessProgressPolicy::DEFAULTS
+        Runtime::ProcessProgressPolicy.new(
+          enabled: values.fetch('enabled', defaults[:enabled]),
+          heartbeat_interval_ms: values.fetch('heartbeat_interval_ms', defaults[:heartbeat_interval_ms]),
+          stall_threshold_ms: values.fetch('stall_threshold_ms', defaults[:stall_threshold_ms]),
+          max_processes: values.fetch('max_processes', defaults[:max_processes]),
+          max_frames_per_poll: values.fetch('max_frames_per_poll', defaults[:max_frames_per_poll]),
+          max_buffer_bytes: values.fetch('max_buffer_bytes', defaults[:max_buffer_bytes])
+        )
+      rescue RuntimeContractError => e
+        field = e.message.split.first
+        raise ConfigurationError, "runtime.process_progress.#{field} is invalid: #{e.message}"
+      end
+
       def runtime_operation_liveness_policy_from(runtime)
         values = runtime.fetch('operation_liveness', {})
         defaults = Runtime::OperationLivenessPolicy::DEFAULTS
@@ -250,7 +297,7 @@ module FiberAudit
     def validate_types!(
       include_patterns, exclude_patterns, rules,
       formats, _severity, suppressions, runtime_policy, watchdog_policy,
-      operation_liveness_policy
+      operation_liveness_policy, graph_policy, process_progress_policy
     )
       unless include_patterns.is_a?(Array) &&
              include_patterns.all?(String)
@@ -280,6 +327,15 @@ module FiberAudit
       unless operation_liveness_policy.is_a?(Runtime::OperationLivenessPolicy)
         raise ConfigurationError,
               'runtime_operation_liveness_policy must be a FiberAudit::Runtime::OperationLivenessPolicy'
+      end
+      unless process_progress_policy.is_a?(Runtime::ProcessProgressPolicy)
+        raise ConfigurationError,
+              'runtime_process_progress_policy must be a FiberAudit::Runtime::ProcessProgressPolicy'
+      end
+
+      unless graph_policy.is_a?(Runtime::SynchronizationGraphPolicy)
+        raise ConfigurationError,
+              'runtime_synchronization_graph_policy must be a FiberAudit::Runtime::SynchronizationGraphPolicy'
       end
 
       return if suppressions.nil? || suppressions.is_a?(String)

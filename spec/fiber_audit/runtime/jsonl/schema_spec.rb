@@ -9,6 +9,18 @@ RSpec.describe FiberAudit::Runtime::JSONL::Schema do
       id: session_id,
       started_at: Time.utc(2026, 8, 2, 12),
       started_monotonic_ns: 100,
+      schema_version: '1.0',
+      policy: FiberAudit::Runtime::Policy.new(sampling_rate: 1.0),
+      tool_version: '0.2.0',
+      ruby_version: '3.4.9'
+    )
+  end
+  let(:session_v11) do
+    FiberAudit::Runtime::Session.new(
+      id: session_id,
+      started_at: Time.utc(2026, 8, 2, 12),
+      started_monotonic_ns: 100,
+      process_role: :parent_monitor,
       policy: FiberAudit::Runtime::Policy.new(sampling_rate: 1.0),
       tool_version: '0.2.0',
       ruby_version: '3.4.9'
@@ -45,9 +57,35 @@ RSpec.describe FiberAudit::Runtime::JSONL::Schema do
     )
   end
 
-  it 'uses an independent runtime schema version' do
-    expect(described_class::SCHEMA_VERSION).to eq('1.0')
-    expect(described_class::SCHEMA_VERSION).to equal(FiberAudit::Runtime::JSONL::Schema::SCHEMA_VERSION)
+  it 'uses JSONL 1.1 as current while retaining 1.0 validation' do
+    expect(described_class::SCHEMA_VERSION).to eq('1.1')
+    expect(described_class::SUPPORTED_SCHEMA_VERSIONS).to eq(%w[1.0 1.1])
+  end
+
+  it 'builds version-specific session-start records' do
+    legacy = described_class.start_record(session)
+    current = described_class.start_record(FiberAudit::Runtime::Session.new(
+                                             id: session_id,
+                                             started_at: Time.utc(2026, 8, 2, 12),
+                                             started_monotonic_ns: 100,
+                                             process_role: :parent_monitor,
+                                             policy: FiberAudit::Runtime::Policy.new(sampling_rate: 1.0),
+                                             tool_version: '0.2.0',
+                                             ruby_version: '3.4.9'
+                                           ))
+    expect(legacy['schema_version']).to eq('1.0')
+    expect(legacy['payload']).not_to have_key('process_role')
+    expect(current['schema_version']).to eq('1.1')
+    expect(current['payload']['process_role']).to eq('parent_monitor')
+  end
+
+  it 'rejects unsupported versions and version-incompatible start payloads' do
+    invalid = mutable_copy(described_class.start_record(session))
+    invalid['schema_version'] = '2.0'
+    expect { described_class.validate!(invalid) }.to raise_error(FiberAudit::RuntimeContractError, /schema_version/)
+    invalid = mutable_copy(described_class.start_record(session))
+    invalid['payload']['process_role'] = 'audited_process'
+    expect { described_class.validate!(invalid) }.to raise_error(FiberAudit::RuntimeContractError, /unknown key/)
   end
 
   it 'builds deterministic session-start records' do
@@ -80,7 +118,10 @@ RSpec.describe FiberAudit::Runtime::JSONL::Schema do
         location: FiberAudit::Runtime::Location.new(path: 'app/jobs/task.rb', line: 8),
         measurements: { operation_sequence: 1 }
       )
-      record = described_class.event_record(session_id: session_id, sequence: index + 1, event: probe_event)
+      record = described_class.event_record(
+        session_id: session_id, sequence: index + 1, event: probe_event,
+        schema_version: session.schema_version
+      )
 
       expect(described_class.validate!(record)).to equal(record)
       expect(record['schema_version']).to eq('1.0')
@@ -99,7 +140,10 @@ RSpec.describe FiberAudit::Runtime::JSONL::Schema do
       measurements: { scheduler_present: nil, fiber_blocking: nil }
     )
 
-    record = described_class.event_record(session_id: session_id, sequence: 1, event: unknown_event)
+    record = described_class.event_record(
+      session_id: session_id, sequence: 1, event: unknown_event,
+      schema_version: session.schema_version
+    )
 
     expect(described_class.validate!(record)).to equal(record)
     expect(record.fetch('schema_version')).to eq('1.0')
@@ -174,14 +218,33 @@ RSpec.describe FiberAudit::Runtime::JSONL::Schema do
     expect { described_class.validate!(invalid) }.to raise_error(FiberAudit::RuntimeContractError)
   end
 
-  it 'matches the versioned three-record JSONL fixture' do
+  it 'matches the versioned three-record JSONL 1.0 fixture' do
     records = [
       described_class.start_record(session),
-      described_class.event_record(session_id: session_id, sequence: 1, event: event),
-      described_class.end_record(session_id: session_id, sequence: 2, summary: summary)
+      described_class.event_record(
+        session_id: session_id, sequence: 1, event: event, schema_version: session.schema_version
+      ),
+      described_class.end_record(
+        session_id: session_id, sequence: 2, summary: summary, schema_version: session.schema_version
+      )
     ]
     output = records.map { |record| described_class.dump(record, max_record_bytes: 16_384) }.join
     fixture = File.read(fixtures_path('runtime', 'session_v1.jsonl'))
+    expect(output).to eq(fixture)
+  end
+
+  it 'matches the versioned three-record JSONL 1.1 fixture' do
+    records = [
+      described_class.start_record(session_v11),
+      described_class.event_record(
+        session_id: session_id, sequence: 1, event: event, schema_version: session_v11.schema_version
+      ),
+      described_class.end_record(
+        session_id: session_id, sequence: 2, summary: summary, schema_version: session_v11.schema_version
+      )
+    ]
+    output = records.map { |record| described_class.dump(record, max_record_bytes: 16_384) }.join
+    fixture = File.read(fixtures_path('runtime', 'session_v1_1.jsonl'))
     expect(output).to eq(fixture)
   end
 

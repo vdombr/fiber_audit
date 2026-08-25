@@ -321,6 +321,8 @@ RSpec.describe FiberAudit::Runtime::Probes::Base do
     it 'adds scalar operation-specific scheduler classification to targeted events' do
       snapshot = FiberAudit::Runtime::SchedulerSnapshot.new(
         scheduler_present: true,
+        current_scheduler_present: true,
+        scheduler_snapshot_consistent: true,
         fiber_blocking: false,
         scheduler_process_wait_supported: true
       )
@@ -334,8 +336,10 @@ RSpec.describe FiberAudit::Runtime::Probes::Base do
         expect(event.dig('payload', 'measurements')).to include(
           'operation_wait_possible' => true,
           'operation_inventory_only' => false,
-          'operation_scheduler_capability_required' => true,
-          'operation_scheduler_capability_supported' => true,
+          'operation_core_capability_required' => false,
+          'operation_optional_capability_required' => true,
+          'operation_optional_capability_applicable' => true,
+          'operation_optional_capability_supported' => true,
           'operation_scheduler_cooperation_available' => true
         )
       end
@@ -351,7 +355,7 @@ RSpec.describe FiberAudit::Runtime::Probes::Base do
       measurements = events(io).first.dig('payload', 'measurements')
 
       expect(measurements).to include(
-        'operation_scheduler_capability_supported' => nil,
+        'operation_optional_capability_supported' => nil,
         'operation_scheduler_cooperation_available' => nil
       )
       expect(measurements.values).to all(satisfy do |value|

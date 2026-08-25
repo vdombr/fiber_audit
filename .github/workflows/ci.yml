@@ -27,6 +27,14 @@ jobs:
       - name: Run RuboCop
         run: bundle exec rubocop
 
+      - name: Run scheduler semantics
+        run: bundle exec ruby script/scheduler-semantics
+
+      - name: Run conformance specs
+        env:
+          FIBER_AUDIT_REQUIRE_NATIVE_GVL_FIXTURE: '1'
+        run: bundle exec rspec spec/conformance
+
       - name: Run tests
         run: bundle exec rspec
 

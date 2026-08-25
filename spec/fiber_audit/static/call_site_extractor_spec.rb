@@ -216,6 +216,49 @@ RSpec.describe FiberAudit::Static::CallSiteExtractor do
       end
     end
 
+    context 'with explicit blocking Fiber regions' do
+      def extract_source(source, semantic_index: nil)
+        Dir.mktmpdir do |directory|
+          path = File.join(directory, 'fiber_context.rb')
+          File.write(path, source)
+          result = described_class.new(files: [path], semantic_index: semantic_index).call
+          expect(result.parse_errors).to be_empty
+          return result.call_sites
+        end
+      end
+
+      it 'propagates the nearest context through nested attached blocks' do
+        sites = extract_source(<<~RUBY)
+          Fiber.blocking do
+            Process.wait
+            Fiber.new(blocking: true) { IO.select([], [], [], nil) }
+          end
+        RUBY
+
+        outer = sites.find { |site| site.method_name == :blocking }
+        inner = sites.find { |site| site.method_name == :new }
+        wait = sites.find { |site| site.method_name == :wait }
+        select = sites.find { |site| site.method_name == :select }
+
+        expect(wait.fiber_context).to equal(outer.fiber_context)
+        expect(inner.fiber_context.kind).to eq(:fiber_new)
+        expect(select.fiber_context).to equal(inner.fiber_context)
+        expect(select.fiber_context).not_to equal(outer.fiber_context)
+      end
+
+      it 'does not invent contexts for dynamic, false, receiverless, or blockless forms' do
+        sites = extract_source(<<~RUBY)
+          value = true
+          Fiber.new(blocking: false) { Process.wait }
+          Fiber.new(blocking: value) { Process.wait }
+          blocking { Process.wait }
+          Fiber.new(blocking: true)
+        RUBY
+
+        expect(sites.map(&:fiber_context).compact).to be_empty
+      end
+    end
+
     context 'with malformed fixture' do
       let(:file) { File.join(fixtures_path, 'malformed.rb') }
       let(:result) { described_class.new(files: [file]).call }

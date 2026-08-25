@@ -8,6 +8,8 @@ require_relative 'policy'
 require_relative 'validation'
 require_relative 'watchdog_policy'
 require_relative 'operation_liveness_policy'
+require_relative 'synchronization_graph_policy'
+require_relative 'process_progress_policy'
 
 module FiberAudit
   module Runtime
@@ -19,11 +21,17 @@ module FiberAudit
       FAILURE_MODE_KEY = 'FIBER_AUDIT_RUNTIME_FAILURE_MODE'
       WATCHDOG_SETTINGS_KEY = 'FIBER_AUDIT_RUNTIME_WATCHDOG_SETTINGS'
       OPERATION_LIVENESS_SETTINGS_KEY = 'FIBER_AUDIT_RUNTIME_OPERATION_LIVENESS_SETTINGS'
+      SYNCHRONIZATION_GRAPH_SETTINGS_KEY = 'FIBER_AUDIT_RUNTIME_SYNCHRONIZATION_GRAPH_SETTINGS'
+      PROCESS_PROGRESS_SETTINGS_KEY = 'FIBER_AUDIT_RUNTIME_PROCESS_PROGRESS_SETTINGS'
+      PROCESS_PROGRESS_WRITER_FD_KEY = 'FIBER_AUDIT_RUNTIME_PROCESS_PROGRESS_WRITER_FD'
+      MAX_PROCESS_PROGRESS_SETTINGS_BYTES = 1_024
+      MAX_INHERITED_FD = 1_048_575
       PROBES_KEY = 'FIBER_AUDIT_RUNTIME_PROBES'
       BOOT_REQUIRE = '-rfiber_audit/runtime/boot'
       MAX_SETTINGS_BYTES = 16_384
       MAX_WATCHDOG_SETTINGS_BYTES = 1_024
       MAX_OPERATION_LIVENESS_SETTINGS_BYTES = 1_024
+      MAX_SYNCHRONIZATION_GRAPH_SETTINGS_BYTES = 1_024
       SETTINGS_KEYS = %w[protocol_version launch_id project_root output_directory policy].freeze
       POLICY_KEYS = %w[
         redaction sampling_rate max_events_per_second max_events_per_session
@@ -34,6 +42,12 @@ module FiberAudit
       ].freeze
       OPERATION_LIVENESS_KEYS = %w[
         protocol_version enabled poll_interval_ms long_active_threshold_ms
+      ].freeze
+      SYNCHRONIZATION_GRAPH_KEYS = %w[
+        protocol_version enabled max_identities max_resources max_wait_edges max_cycle_depth
+      ].freeze
+      PROCESS_PROGRESS_KEYS = %w[
+        protocol_version enabled heartbeat_interval_ms stall_threshold_ms max_processes max_frames_per_poll max_buffer_bytes
       ].freeze
 
       Settings = Data.define(:protocol_version, :launch_id, :project_root, :output_directory, :policy) do
@@ -110,6 +124,86 @@ module FiberAudit
         settings
       rescue JSON::ParserError, ArgumentError => e
         raise RuntimeContractError, "invalid runtime activation settings: #{e.message}"
+      end
+
+      def dump_synchronization_graph_policy(policy)
+        require_synchronization_graph_policy!(policy)
+        payload = { 'protocol_version' => PROTOCOL_VERSION }.merge(policy.to_h.transform_keys(&:to_s))
+        encoded = JSON.generate(payload)
+        if encoded.bytesize > MAX_SYNCHRONIZATION_GRAPH_SETTINGS_BYTES
+          raise RuntimeSafetyError,
+                'runtime synchronization-graph activation settings are too large'
+        end
+
+        encoded.freeze
+      end
+
+      def load_synchronization_graph_policy(environment = ENV)
+        value = environment[SYNCHRONIZATION_GRAPH_SETTINGS_KEY]
+        return SynchronizationGraphPolicy::DISABLED if value.nil?
+        unless value.is_a?(String) && value.valid_encoding? && value.bytesize <= MAX_SYNCHRONIZATION_GRAPH_SETTINGS_BYTES
+          raise RuntimeContractError, 'runtime synchronization-graph activation settings are invalid'
+        end
+
+        payload = JSON.parse(value)
+        require_exact_keys!(payload, SYNCHRONIZATION_GRAPH_KEYS, 'runtime synchronization-graph activation settings')
+        unless payload.fetch('protocol_version') == PROTOCOL_VERSION
+          raise RuntimeContractError,
+                "runtime synchronization-graph activation protocol must be #{PROTOCOL_VERSION}"
+        end
+
+        SynchronizationGraphPolicy.new(**payload.except('protocol_version').transform_keys(&:to_sym))
+      rescue JSON::ParserError, ArgumentError => e
+        raise RuntimeContractError, "invalid runtime synchronization-graph activation settings: #{e.message}"
+      end
+
+      def dump_process_progress_policy(policy)
+        require_process_progress_policy!(policy)
+        payload = { 'protocol_version' => PROTOCOL_VERSION }.merge(policy.to_h.transform_keys(&:to_s))
+        encoded = JSON.generate(payload)
+        if encoded.bytesize > MAX_PROCESS_PROGRESS_SETTINGS_BYTES
+          raise RuntimeSafetyError,
+                'runtime process-progress activation settings are too large'
+        end
+
+        encoded.freeze
+      end
+
+      def load_process_progress_policy(environment = ENV)
+        value = environment[PROCESS_PROGRESS_SETTINGS_KEY]
+        return ProcessProgressPolicy::DISABLED if value.nil?
+        unless value.is_a?(String) && value.valid_encoding? && value.bytesize <= MAX_PROCESS_PROGRESS_SETTINGS_BYTES
+          raise RuntimeContractError, 'runtime process-progress activation settings are invalid'
+        end
+
+        payload = JSON.parse(value)
+        require_exact_keys!(payload, PROCESS_PROGRESS_KEYS, 'runtime process-progress activation settings')
+        unless payload.fetch('protocol_version') == PROTOCOL_VERSION
+          raise RuntimeContractError,
+                "runtime process-progress activation protocol must be #{PROTOCOL_VERSION}"
+        end
+
+        ProcessProgressPolicy.new(**payload.except('protocol_version').transform_keys(&:to_sym))
+      rescue JSON::ParserError, ArgumentError => e
+        raise RuntimeContractError, "invalid runtime process-progress activation settings: #{e.message}"
+      end
+
+      def process_progress_writer_fd(environment = ENV)
+        value = environment[PROCESS_PROGRESS_WRITER_FD_KEY]
+        return if value.nil?
+        unless value.is_a?(String) && value.match?(/\A[0-9]{1,7}\z/)
+          raise RuntimeContractError,
+                'runtime process-progress writer descriptor is invalid'
+        end
+
+        descriptor = Integer(value, 10)
+        raise RuntimeContractError, 'runtime process-progress writer descriptor is out of range' unless descriptor.between?(
+          3, MAX_INHERITED_FD
+        )
+
+        descriptor
+      rescue ArgumentError
+        raise RuntimeContractError, 'runtime process-progress writer descriptor is invalid'
       end
 
       def dump_watchdog_policy(policy)
@@ -215,10 +309,15 @@ module FiberAudit
         raise RuntimeContractError, "#{PROBES_KEY} must be 1 when present"
       end
 
+      # Keep child activation serialization together at this environment boundary.
+      # rubocop:disable Metrics/AbcSize
       def child_environment(
         settings:,
         watchdog_policy: nil,
         operation_liveness_policy: nil,
+        synchronization_graph_policy: nil,
+        process_progress_policy: nil,
+        process_progress_writer_fd: nil,
         probes_enabled: false,
         base_environment: ENV,
         library_path: default_library_path
@@ -226,6 +325,9 @@ module FiberAudit
         require_settings!(settings)
         require_watchdog_policy!(watchdog_policy) if watchdog_policy
         require_operation_liveness_policy!(operation_liveness_policy) if operation_liveness_policy
+        require_synchronization_graph_policy!(synchronization_graph_policy) if synchronization_graph_policy
+        require_process_progress_policy!(process_progress_policy) if process_progress_policy
+        validate_process_progress_transport!(process_progress_policy, process_progress_writer_fd)
         raise RuntimeContractError, 'probes_enabled must be a Boolean' unless [true, false].include?(probes_enabled)
         raise RuntimeContractError, 'base_environment must be a Hash-like object' unless base_environment.respond_to?(:[])
 
@@ -240,9 +342,18 @@ module FiberAudit
         if operation_liveness_policy
           environment[OPERATION_LIVENESS_SETTINGS_KEY] = dump_operation_liveness_policy(operation_liveness_policy)
         end
+        if synchronization_graph_policy
+          environment[SYNCHRONIZATION_GRAPH_SETTINGS_KEY] = dump_synchronization_graph_policy(synchronization_graph_policy)
+        end
+        if process_progress_policy
+          environment[PROCESS_PROGRESS_SETTINGS_KEY] =
+            dump_process_progress_policy(process_progress_policy)
+        end
+        environment[PROCESS_PROGRESS_WRITER_FD_KEY] = process_progress_writer_fd.to_s.freeze if process_progress_writer_fd
         environment[PROBES_KEY] = '1' if probes_enabled
         environment.transform_values(&:freeze).freeze
       end
+      # rubocop:enable Metrics/AbcSize
 
       def prepare_output_directory(path)
         normalized = normalize_absolute_path(path, 'output directory')
@@ -305,6 +416,61 @@ module FiberAudit
       end
       private_class_method :require_watchdog_policy!
 
+      def require_process_progress_policy!(value)
+        return if value.is_a?(ProcessProgressPolicy)
+
+        raise RuntimeContractError, 'process_progress_policy must be FiberAudit::Runtime::ProcessProgressPolicy'
+      end
+      private_class_method :require_process_progress_policy!
+
+      def validate_process_progress_transport!(policy, descriptor)
+        process_progress_writer_fd(PROCESS_PROGRESS_WRITER_FD_KEY => descriptor.to_s) if descriptor
+        if policy&.enabled? && descriptor.nil?
+          raise RuntimeContractError,
+                'enabled process progress requires an inherited writer descriptor'
+        end
+        return unless descriptor && !policy&.enabled?
+
+        raise RuntimeContractError,
+              'process progress writer descriptor requires an enabled policy'
+      end
+      private_class_method :validate_process_progress_transport!
+
+      def attach_process_progress_transport(environment, policy:, writer_fd:)
+        raise RuntimeContractError, 'child environment must be a Hash' unless environment.is_a?(Hash)
+
+        require_process_progress_policy!(policy)
+        raise RuntimeContractError, 'process progress transport requires an enabled policy' unless policy.enabled?
+        if environment.key?(PROCESS_PROGRESS_SETTINGS_KEY) || environment.key?(PROCESS_PROGRESS_WRITER_FD_KEY)
+          raise RuntimeContractError, 'child environment already contains process progress transport'
+        end
+
+        descriptor = process_progress_writer_fd(PROCESS_PROGRESS_WRITER_FD_KEY => writer_fd.to_s)
+        environment.merge(PROCESS_PROGRESS_SETTINGS_KEY => dump_process_progress_policy(policy),
+                          PROCESS_PROGRESS_WRITER_FD_KEY => descriptor.to_s.freeze).transform_values do |value|
+          value&.dup&.freeze
+        end.freeze
+      end
+
+      def open_process_progress_writer(environment = ENV)
+        descriptor = process_progress_writer_fd(environment)
+        return if descriptor.nil?
+
+        writer = IO.for_fd(descriptor, 'wb', autoclose: true)
+        writer.binmode
+        writer.sync = true
+        writer
+      rescue SystemCallError, IOError, ArgumentError => e
+        raise RuntimeContractError, "cannot open process progress writer descriptor: #{e.class}"
+      end
+
+      def require_synchronization_graph_policy!(value)
+        return if value.is_a?(SynchronizationGraphPolicy)
+
+        raise RuntimeContractError, 'synchronization_graph_policy must be FiberAudit::Runtime::SynchronizationGraphPolicy'
+      end
+      private_class_method :require_synchronization_graph_policy!
+
       def require_operation_liveness_policy!(value)
         return if value.is_a?(OperationLivenessPolicy)
 
@@ -318,8 +484,8 @@ module FiberAudit
 
         unknown = value.keys - expected
         missing = expected - value.keys
-        raise RuntimeContractError, "unknown key #{unknown.first.inspect} at #{path}" unless unknown.empty?
-        raise RuntimeContractError, "missing key #{missing.first.inspect} at #{path}" unless missing.empty?
+        raise RuntimeContractError, "unknown key #{unknown.first} at #{path}" unless unknown.empty?
+        raise RuntimeContractError, "missing key #{missing.first} at #{path}" unless missing.empty?
       end
       private_class_method :require_exact_keys!
 

@@ -24,6 +24,17 @@ RSpec.describe FiberAudit::Runtime::Environment do
     )
   end
 
+  let(:process_progress_policy) do
+    FiberAudit::Runtime::ProcessProgressPolicy.new(
+      enabled: true,
+      heartbeat_interval_ms: 20,
+      stall_threshold_ms: 125,
+      max_processes: 100,
+      max_frames_per_poll: 30,
+      max_buffer_bytes: 8_192
+    )
+  end
+
   def with_directories
     Dir.mktmpdir do |root|
       output = File.join(root, 'runtime output')
@@ -250,6 +261,83 @@ RSpec.describe FiberAudit::Runtime::Environment do
       )
       expect(child.fetch('RUBYOPT').scan(described_class::BOOT_REQUIRE).size).to eq(1)
       expect(child.fetch('RUBYLIB').split(File::PATH_SEPARATOR).count(library)).to eq(1)
+    end
+  end
+
+  it 'round-trips strict process-progress settings and a bounded numeric descriptor' do
+    encoded = described_class.dump_process_progress_policy(process_progress_policy)
+    environment = {
+      described_class::PROCESS_PROGRESS_SETTINGS_KEY => encoded,
+      described_class::PROCESS_PROGRESS_WRITER_FD_KEY => '9'
+    }
+    payload = JSON.parse(encoded)
+
+    expect(described_class.load_process_progress_policy(environment)).to eq(process_progress_policy)
+    expect(described_class.process_progress_writer_fd(environment)).to eq(9)
+    expect(payload.keys).to eq(described_class::PROCESS_PROGRESS_KEYS)
+    expect(payload.to_s).not_to include('command', 'argument', 'SECRET')
+    expect(described_class.load_process_progress_policy({}))
+      .to equal(FiberAudit::Runtime::ProcessProgressPolicy::DISABLED)
+    expect(described_class.process_progress_writer_fd({})).to be_nil
+  end
+
+  it 'rejects malformed process-progress policy and writer-descriptor transport' do
+    payload = JSON.parse(described_class.dump_process_progress_policy(process_progress_policy))
+    invalid = [
+      'malformed', JSON.generate(payload.merge('command' => 'secret')),
+      JSON.generate(payload.except('max_processes')),
+      JSON.generate(payload.merge('protocol_version' => 99)),
+      'x' * (described_class::MAX_PROCESS_PROGRESS_SETTINGS_BYTES + 1)
+    ]
+    invalid.each do |value|
+      expect do
+        described_class.load_process_progress_policy(
+          described_class::PROCESS_PROGRESS_SETTINGS_KEY => value
+        )
+      end.to raise_error(FiberAudit::RuntimeContractError)
+    end
+    %w[-1 2 12x 9999999].each do |value|
+      expect do
+        described_class.process_progress_writer_fd(
+          described_class::PROCESS_PROGRESS_WRITER_FD_KEY => value
+        )
+      end.to raise_error(FiberAudit::RuntimeContractError)
+    end
+  end
+
+  it 'attaches one immutable progress transport without mutating the base delta' do
+    base = { described_class::ACTIVATION_KEY => '1' }.freeze
+    attached = described_class.attach_process_progress_transport(
+      base, policy: process_progress_policy, writer_fd: 9
+    )
+
+    expect(base).not_to have_key(described_class::PROCESS_PROGRESS_SETTINGS_KEY)
+    expect(described_class.load_process_progress_policy(attached)).to eq(process_progress_policy)
+    expect(described_class.process_progress_writer_fd(attached)).to eq(9)
+    expect(attached).to be_frozen
+    expect(attached.values).to all(be_frozen)
+    expect do
+      described_class.attach_process_progress_transport(
+        attached, policy: process_progress_policy, writer_fd: 10
+      )
+    end.to raise_error(FiberAudit::RuntimeContractError, /already contains/)
+  end
+
+  it 'requires enabled policy and writer descriptor together' do
+    with_directories do |root, output|
+      settings = described_class.build(
+        policy: policy, output_directory: output, project_root: root, launch_id: launch_id
+      )
+      expect do
+        described_class.child_environment(settings: settings, process_progress_policy: process_progress_policy)
+      end.to raise_error(FiberAudit::RuntimeContractError, /inherited writer descriptor/)
+      expect do
+        described_class.child_environment(
+          settings: settings,
+          process_progress_policy: FiberAudit::Runtime::ProcessProgressPolicy::DISABLED,
+          process_progress_writer_fd: 9
+        )
+      end.to raise_error(FiberAudit::RuntimeContractError, /enabled policy/)
     end
   end
 

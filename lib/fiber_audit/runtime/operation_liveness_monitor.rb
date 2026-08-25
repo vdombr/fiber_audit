@@ -139,7 +139,8 @@ module FiberAudit
       def classifier_measurements(entry)
         SchedulerEvidenceClassifier.measurements(
           operation: entry.operation,
-          scheduler_snapshot: entry.scheduler_snapshot
+          scheduler_snapshot: entry.scheduler_snapshot,
+          invocation_measurements: entry.invocation_measurements
         )
       end
 
@@ -159,6 +160,7 @@ module FiberAudit
           long_active_candidate_count: candidate_count
         }
         measurements.merge!(entry.scheduler_snapshot.to_measurements) if entry.scheduler_snapshot
+        measurements.merge!(entry.invocation_measurements)
         measurements.merge!(classifier_measurements(entry))
         emit_event(kind: :operation_long_active_started, entry: entry, monotonic_ns: now_ns,
                    duration_ns: age_ns, measurements: measurements)
@@ -175,6 +177,7 @@ module FiberAudit
           operation_finished: operation_finished
         }
         measurements.merge!(entry.scheduler_snapshot.to_measurements) if entry.scheduler_snapshot
+        measurements.merge!(entry.invocation_measurements)
         measurements.merge!(classifier_measurements(entry))
         emit_event(kind: :operation_long_active_completed, entry: entry, monotonic_ns: now_ns,
                    duration_ns: duration_ns, measurements: measurements)

@@ -80,7 +80,7 @@ RSpec.describe FiberAudit::Static::Rules::DirectSocket do
     it 'distinguishes allocation, endpoint setup, local connection, and unknown subclass constructors' do
       cases = {
         'Socket' => [:socket_allocation, 'Direct socket allocation', false, true, nil],
-        'TCPSocket' => [:socket_resolve_connect, 'Direct socket endpoint setup', true, false, :address_resolve],
+        'TCPSocket' => [:socket_resolve_connect, 'Direct socket endpoint setup', true, false, nil],
         'UNIXSocket' => [:socket_local_connect, 'Direct local-socket connection', true, false, nil]
       }
 

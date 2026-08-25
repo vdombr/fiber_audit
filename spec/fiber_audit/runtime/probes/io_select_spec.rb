@@ -37,6 +37,17 @@ RSpec.describe FiberAudit::Runtime::Probes::IOSelect do
     writer&.close
   end
 
+  it 'records zero, nonzero, nil, and unsupported timeout shapes without values' do
+    expect(described_class.timeout_measurements([[], [], [], 0])).to eq(timeout_present: true, timeout_zero: true)
+    expect(described_class.timeout_measurements([[], [], [], 0.125])).to eq(timeout_present: true, timeout_zero: false)
+    expect(described_class.timeout_measurements([[], [], [], nil])).to eq(timeout_present: false, timeout_zero: false)
+
+    secret = Object.new
+    measurements = described_class.timeout_measurements([[], [], [], secret])
+    expect(measurements).to eq(timeout_present: true, timeout_zero: nil)
+    expect(measurements.to_s).not_to include(secret.inspect)
+  end
+
   it 're-raises invalid argument errors unchanged' do
     @runtime = start_probe_runtime
     error = nil

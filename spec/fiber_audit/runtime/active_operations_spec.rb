@@ -121,6 +121,42 @@ RSpec.describe FiberAudit::Runtime::ActiveOperations do
     end.to raise_error(FiberAudit::RuntimeContractError, /location/)
   end
 
+  it 'retains only immutable allowlisted invocation booleans' do
+    registry = described_class.new
+    registry.register(operation: 'IO.select', location: location, execution_context: :job,
+                      monotonic_ns: 100,
+                      invocation_measurements: {
+                        timeout_present: true, 'timeout_zero' => false,
+                        endpoint_resolution_applicable: nil, ignored_numeric: 25,
+                        ignored_secret: 'privacy-sentinel'
+                      })
+
+    measurements = registry.snapshot.first.invocation_measurements
+    expect(measurements).to eq(timeout_present: true, timeout_zero: false,
+                               endpoint_resolution_applicable: nil)
+    expect(measurements).to be_frozen
+    expect(measurements.to_s).not_to include('privacy-sentinel')
+  end
+
+  it 'rejects malformed or ambiguous invocation evidence' do
+    registry = described_class.new
+    expect do
+      registry.register(operation: 'IO.select', monotonic_ns: 100,
+                        invocation_measurements: { timeout_zero: 0 })
+    end.to raise_error(FiberAudit::RuntimeContractError, /timeout_zero must be a Boolean or nil/)
+    expect do
+      registry.register(operation: 'IO.select', monotonic_ns: 100,
+                        invocation_measurements: { timeout_zero: false, 'timeout_zero' => false })
+    end.to raise_error(FiberAudit::RuntimeContractError, /duplicate invocation measurement/)
+  end
+
+  it 'defaults legacy registrations to an immutable empty invocation hash' do
+    registry = described_class.new
+    register(registry)
+    expect(registry.snapshot.first.invocation_measurements).to eq({})
+    expect(registry.snapshot.first.invocation_measurements).to be_frozen
+  end
+
   context 'with scheduler snapshot' do
     let(:snapshot) do
       FiberAudit::Runtime::SchedulerSnapshot.new(

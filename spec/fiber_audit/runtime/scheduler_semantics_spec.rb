@@ -43,6 +43,10 @@ RSpec.describe 'supported Ruby scheduler semantics' do
     expect(status).to be_success
     result = JSON.parse(stdout)
     expect(result).to include(
+      'fiber_blocking_state' => {
+        'blocking' => true,
+        'nonblocking' => false
+      },
       'thread_join' => 'block',
       'thread_value' => 'block',
       'mutex_lock' => 'block',
@@ -67,6 +71,29 @@ RSpec.describe 'supported Ruby scheduler semantics' do
       'waitall' => 'process_wait',
       'status_wait' => 'process_wait'
     )
+  end
+
+  it 'checks current-scheduler visibility without assuming unsupported APIs' do
+    stdout, stderr, status = run_semantics
+
+    expect(stderr).to eq('')
+    expect(status).to be_success
+    state = JSON.parse(stdout).fetch('current_scheduler_state')
+    if Fiber.respond_to?(:current_scheduler)
+      expect(state).to eq(
+        'api_supported' => true,
+        'scheduler_present' => true,
+        'blocking_current_present' => false,
+        'nonblocking_current_equal' => true
+      )
+    else
+      expect(state).to eq(
+        'api_supported' => false,
+        'scheduler_present' => true,
+        'blocking_current_present' => nil,
+        'nonblocking_current_equal' => nil
+      )
+    end
   end
 
   it 'behaviorally checks Ruby 4 IO-close interruption with an explicit version guard' do

@@ -1,11 +1,13 @@
 # frozen_string_literal: true
 
 require_relative 'base'
+require_relative 'fiber_context'
 require_relative 'http'
 require_relative 'io_select'
 require_relative 'socket'
 require_relative 'subprocess'
 require_relative 'synchronization'
+require_relative '../synchronization_graph'
 require_relative 'thread_state'
 require_relative 'thread_wait'
 
@@ -15,6 +17,7 @@ module FiberAudit
       # Process-local owner of idempotent probe installation and dispatch.
       class Registry
         PROBE_INSTALLERS = [
+          FiberContext,
           Subprocess,
           ThreadWait,
           Synchronization,
@@ -43,10 +46,14 @@ module FiberAudit
         end
 
         class << self
-          def activate(base:)
+          def activate(base:, synchronization_graph: nil)
             raise RuntimeContractError, 'base must be a Runtime::Probes::Base' unless base.is_a?(Base)
+            unless synchronization_graph.nil? || synchronization_graph.is_a?(SynchronizationGraph)
+              raise RuntimeContractError,
+                    'synchronization_graph must be a Runtime::SynchronizationGraph or nil'
+            end
 
-            registry = new(base: base)
+            registry = new(base: base, synchronization_graph: synchronization_graph)
             @current = registry
             registry.install!
             registry
@@ -54,6 +61,26 @@ module FiberAudit
             registry&.deactivate
             @current = nil if @current.equal?(registry)
             raise
+          end
+
+          def with_fiber_mode(kind)
+            raise ArgumentError, 'Fiber mode context requires a block' unless block_given?
+
+            registry = current_for_observation
+            return yield unless registry
+
+            application_started = false
+            begin
+              FiberModeContext.with(kind) do
+                application_started = true
+                yield
+              end
+            rescue StandardError => e
+              raise if application_started
+
+              registry.base.instrumentation_failure(e)
+              yield
+            end
           end
 
           def observe(operation:, measurements: {}, emit_start: false, measurement_builder: nil, &application)
@@ -84,7 +111,33 @@ module FiberAudit
             current_for_observation
           end
 
+          def synchronization_wait(resource:, operation:)
+            dispatch_graph(:begin_wait, resource: resource, operation: operation)
+          end
+
+          def synchronization_acquired(resource:, operation:, wait: nil)
+            dispatch_graph(:acquired, resource: resource, operation: operation, wait: wait)
+          end
+
+          def synchronization_wait_completed(wait:, operation:, acquired: false)
+            dispatch_graph(:wait_completed, wait: wait, operation: operation, acquired: acquired)
+          end
+
+          def synchronization_released(resource:, operation:)
+            dispatch_graph(:released, resource: resource, operation: operation)
+          end
+
           private
+
+          def dispatch_graph(method_name, **arguments)
+            registry = current_for_observation
+            graph = registry&.synchronization_graph
+            return unless graph&.active?
+
+            Synchronization.with_internal_dispatch do
+              registry.base.with_guard { graph.public_send(method_name, **arguments) }
+            end
+          end
 
           def current_for_observation
             registry = @current
@@ -98,10 +151,11 @@ module FiberAudit
           end
         end
 
-        attr_reader :base, :owner_pid
+        attr_reader :base, :owner_pid, :synchronization_graph
 
-        def initialize(base:)
+        def initialize(base:, synchronization_graph: nil)
           @base = base
+          @synchronization_graph = synchronization_graph
           @owner_pid = Process.pid
           @mutex = Mutex.new
           @active = true

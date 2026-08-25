@@ -5,13 +5,13 @@ require 'fiber_audit/static/call_site'
 
 RSpec.describe FiberAudit::Static::CallSite do
   describe 'Data contract' do
-    it 'defines exactly 13 fields' do
+    it 'defines exactly 14 fields including optional Fiber context' do
       expect(described_class.members).to eq(
         %i[
           path line column
           receiver_source receiver_constant method_name
           arguments enclosing_symbol nesting
-          execution_context resolution confidence
+          execution_context resolution confidence fiber_context
         ]
       )
     end
@@ -40,6 +40,31 @@ RSpec.describe FiberAudit::Static::CallSite do
 
       expect(cs.method_name).to eq(:puts)
       expect(cs.method_name).to be_a(Symbol)
+    end
+
+    it 'defaults fiber_context to nil for existing callers' do
+      cs = described_class.new(
+        path: 'test.rb', line: 1, column: 0,
+        receiver_source: nil, receiver_constant: nil, method_name: :puts,
+        arguments: [], enclosing_symbol: nil, nesting: [],
+        execution_context: nil, resolution: nil, confidence: :unknown
+      )
+
+      expect(cs.fiber_context).to be_nil
+    end
+
+    it 'accepts only FiberAudit-owned fiber contexts' do
+      context = FiberAudit::Static::FiberContext.new(kind: :fiber_blocking, line: 1, column: 0)
+      attributes = {
+        path: 'test.rb', line: 1, column: 0,
+        receiver_source: 'Fiber', receiver_constant: 'Fiber', method_name: :blocking,
+        arguments: [], enclosing_symbol: nil, nesting: [],
+        execution_context: nil, resolution: 'Fiber.blocking', confidence: :high
+      }
+
+      expect(described_class.new(**attributes, fiber_context: context).fiber_context).to equal(context)
+      expect { described_class.new(**attributes, fiber_context: Object.new) }
+        .to raise_error(ArgumentError, /fiber_context/)
     end
 
     it 'preserves nil method_name' do

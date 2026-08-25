@@ -33,11 +33,12 @@ RSpec.describe FiberAudit::Runtime::OperationLivenessMonitor do
                    .map { |record| record.fetch('payload') }
   end
 
-  def register(operations, monotonic_ns: 0, line: 1, scheduler_snapshot: nil)
+  def register(operations, monotonic_ns: 0, line: 1, scheduler_snapshot: nil, invocation_measurements: {})
     operations.register(operation: 'Mutex#lock',
                         location: FiberAudit::Runtime::Location.new(path: 'app/task.rb', line: line),
                         execution_context: :job, monotonic_ns: monotonic_ns,
-                        scheduler_snapshot: scheduler_snapshot)
+                        scheduler_snapshot: scheduler_snapshot,
+                        invocation_measurements: invocation_measurements)
   end
 
   it 'uses the injected thread factory and emits explicit states without sampling' do
@@ -118,7 +119,10 @@ RSpec.describe FiberAudit::Runtime::OperationLivenessMonitor do
     monitor, recorder, operations, io, = build_monitor
     snapshot = FiberAudit::Runtime::SchedulerSnapshot.new(
       scheduler_present: true,
-      fiber_blocking: false
+      current_scheduler_present: true,
+      scheduler_snapshot_consistent: true,
+      fiber_blocking: false,
+      scheduler_block_supported: true
     )
     handle = register(operations, scheduler_snapshot: snapshot)
     monitor.poll(now_ns: 1_000_000_001)
@@ -133,8 +137,9 @@ RSpec.describe FiberAudit::Runtime::OperationLivenessMonitor do
       expect(payload.fetch('measurements')).to include(
         'operation_wait_possible' => true,
         'operation_inventory_only' => false,
-        'operation_scheduler_capability_required' => true,
-        'operation_scheduler_capability_supported' => true,
+        'operation_core_capability_required' => true,
+        'operation_core_capability_supported' => true,
+        'operation_optional_capability_required' => false,
         'operation_scheduler_cooperation_available' => true
       )
     end

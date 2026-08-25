@@ -85,7 +85,10 @@ RSpec.describe FiberAudit::Audit do
         nesting: [],
         execution_context: nil,
         resolution: nil,
-        confidence: :unknown
+        confidence: :unknown,
+        fiber_context: FiberAudit::Static::FiberContext.new(
+          kind: :fiber_blocking, line: 1, column: 0
+        )
       )
     end
     let(:call_sites) { [absolute_site] }
@@ -99,6 +102,7 @@ RSpec.describe FiberAudit::Audit do
         .with(workspace: semantic_index).and_return(context_resolver)
       expect(context_resolver).to receive(:resolve_all) do |call_sites:|
         expect(call_sites.map(&:path)).to eq(['app/sample.rb'])
+        expect(call_sites.first.fiber_context).to be_a(FiberAudit::Static::FiberContext)
         call_sites
       end
       expect(FiberAudit::Static::Rules::BuiltIns).to receive(:registry)

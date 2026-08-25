@@ -169,7 +169,8 @@ module FiberAudit
           nesting: cs.nesting,
           execution_context: cs.execution_context,
           resolution: cs.resolution,
-          confidence: cs.confidence
+          confidence: cs.confidence,
+          fiber_context: cs.fiber_context
         )
       end
     end

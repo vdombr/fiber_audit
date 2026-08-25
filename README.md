@@ -64,6 +64,13 @@ confirmation. Explicit `--format` always wins.
 | FA1005 | `IO.select` scheduler capability requirement | medium |
 | FA1006 | Socket allocation and constructor endpoint semantics | low |
 | FA1007 | HTTP scheduler cooperation in request-like contexts | medium |
+| FA1008 | Explicit `Fiber.new(blocking: true)` and `Fiber.blocking` regions | low/medium |
+
+FA1008 reports the explicit blocking-Fiber region at low severity. When a
+canonical wait-capable operation is lexically nested in that region, it reports
+medium severity and includes the nested operation as static evidence. This is a
+source-level hypothesis; it does not prove that the region executed or caused a
+stall.
 
 FA1004 reports true `thread_variable_get/set` access. It does not retain keys or
 values and does not claim that request-sensitive leakage occurred. FA1006 keeps
@@ -77,10 +84,14 @@ Use `fiber-audit explain <RULE_ID>` for exact targets and remediation.
 
 The runtime command observes only the command supplied after `--`; static
 analysis never executes discovered source fragments. Each observed Ruby process
-writes a separate owner-only JSONL schema `1.0` session under
-`tmp/fiber-audit-runtime` by default.
+writes a separate owner-only JSONL schema `1.1` session under
+`tmp/fiber-audit-runtime` by default. FiberAudit still validates retained schema
+`1.0` sessions; it does not reinterpret them as `1.1`. Runtime JSONL schema
+`1.1` is independent of the deterministic static report schema `1.0`, which
+remains unchanged. A successful `exec` can intentionally leave a valid session
+without `session_end`.
 
-Targeted probes cover the operations represented by FA1001–FA1007. Events retain
+Targeted probes cover the operations represented by FA1001–FA1008. Events retain
 canonical operation names, monotonic duration, conservative project-relative
 callsites, execution context, ephemeral Thread/Fiber identities, and allowlisted
 scalar measurements. They never retain commands, command arguments, URLs,
@@ -104,22 +115,28 @@ scheduler_process_wait_supported: true | false | nil
 scheduler_address_resolve_supported: true | false | nil
 ```
 
-Operation-specific evidence adds five Boolean/nil measurements:
+Operation-specific evidence adds Boolean/nil measurements for core and optional
+capabilities:
 
 ```text
 operation_wait_possible
 operation_inventory_only
-operation_scheduler_capability_required
-operation_scheduler_capability_supported
+operation_core_capability_required
+operation_core_capability_supported
+operation_optional_capability_required
+operation_optional_capability_applicable
+operation_optional_capability_supported
 operation_scheduler_cooperation_available
 ```
 
 `operation_scheduler_cooperation_available: true` means the captured scheduler
-and Fiber mode were compatible and, for an optional capability, the captured
-hook was supported. Required core coordination hooks such as `block` and
-`kernel_sleep` are inferred from known scheduler presence rather than measured
-separately. This does not prove that the operation cooperated or completed
-without delay. `nil` remains unknown or not applicable.
+and Fiber mode were compatible and every applicable required hook was present.
+Required core coordination hooks such as `block` and `kernel_sleep` are inferred
+from known scheduler presence rather than measured separately. This does not
+prove that the operation cooperated, progressed, or was safe. `nil` remains
+unknown or not applicable. Invocation applicability is derived without retaining
+values: `IO.select` records only timeout presence and known-zero status, while
+socket and HTTP probes record only endpoint-name-resolution applicability.
 
 ### Scheduler watchdog
 
@@ -162,6 +179,38 @@ but still consume recorder rate, event, record-size, and session-size budgets.
 Snapshot and per-poll truncation, drops, unsupported states, internal errors, and
 incomplete sessions remain visible. A successful `exec` may intentionally leave
 a session without `session_end`.
+
+### Explicit blocking-Fiber provenance
+
+Runtime wrappers distinguish `Fiber.new(blocking: true)` from `Fiber.blocking` and
+publish only presence, bounded nesting depth, nearest context kind, and
+truncation. Provenance starts when the application block executes, is reset on
+fork/shutdown, and is separate from the scheduler snapshot. It establishes the
+source of explicit blocking mode, not scheduler harm.
+
+### Synchronization ownership/wait graph
+
+`runtime.synchronization_graph.enabled` opts into bounded phase evidence for
+Mutex, Monitor, MonitorMixin, and ConditionVariable operations. The graph uses
+session-local monotonic actor/resource IDs rather than raw object IDs, tracks
+only transitions observed by narrow wrappers, and makes identity/resource/wait
+and cycle-search truncation visible. `sync_cycle_candidate` means the bounded
+observed ownership/wait graph contained a cycle; it is not an unconditional
+application-deadlock or causality verdict.
+
+### Parent process-progress monitor
+
+`runtime.process_progress.enabled` opts into a private inherited pipe carrying
+fixed-size scalar heartbeat frames. Child writes are nonblocking and drop under
+pipe pressure rather than delaying application work. The supervisor writes a
+separate owner-only JSONL `1.1` session with `process_role: parent_monitor`; it
+never appends to child sessions. Stall start/completion records mean only that a
+tracked `(pid, generation)` stopped/resumed progress past the configured
+threshold. Process silence is temporal evidence, not proof of scheduler harm or
+causality. Native work retaining Ruby's GVL is observable by this parent monitor;
+work releasing the GVL should permit the child progress Thread to continue.
+Sampling, drops, malformed-frame counts, sequence gaps, process limits,
+incomplete sessions, unsupported state, and internal errors remain visible.
 
 Rails execution contexts (`request`, `middleware`, `job`, and `websocket`) are
 captured when Rails integration is active. Bounded immutable Fiber storage
@@ -209,6 +258,19 @@ runtime:
     enabled: true
     poll_interval_ms: 100
     long_active_threshold_ms: 1000
+  synchronization_graph:
+    enabled: false
+    max_identities: 4096
+    max_resources: 2048
+    max_wait_edges: 2048
+    max_cycle_depth: 64
+  process_progress:
+    enabled: false
+    heartbeat_interval_ms: 50
+    stall_threshold_ms: 250
+    max_processes: 1024
+    max_frames_per_poll: 256
+    max_buffer_bytes: 65536
   fail_open: true
 ```
 
@@ -272,14 +334,15 @@ gem build fiber_audit.gemspec
 bundle exec rake release:sanity
 ```
 
-The semantic script uses bounded local Threads, pipes, localhost resolution, and
-child processes. CI exercises it through the spec suite on tested CRuby versions.
-It verifies only scheduler capabilities consumed by FiberAudit; it is not a full
-scheduler-conformance suite.
+The semantic script and `spec/conformance` use bounded local Threads, Fibers,
+pipes, localhost operations, child processes, and a disposable native extension.
+CI runs them on CRuby 3.3, 3.4, and 4.0. The native fixture contrasts work that
+retains the GVL with `rb_thread_call_without_gvl`; unavailable local toolchains
+produce an explicit bounded skip, while CI requires the fixture.
 
-The benchmark reports absent, installed/inactive, active sampling-zero, and
-active sampling-one workloads in isolated subprocesses. It is diagnostic only:
-there is no host-dependent CI timing threshold.
+The benchmark reports absent, installed/inactive, active sampling-zero, active
+sampling-one, synchronization-graph, and process-progress-monitor workloads.
+It is diagnostic only: there is no host-dependent CI timing threshold.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for implementation boundaries and the
 runtime truthfulness, privacy, lifecycle, and schema contracts.

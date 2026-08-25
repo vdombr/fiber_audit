@@ -4,7 +4,7 @@ require 'fiber_audit/runtime/scheduler_snapshot'
 
 RSpec.describe FiberAudit::Runtime::SchedulerSnapshot do
   describe '.new' do
-    it 'creates an immutable snapshot with required state fields' do
+    it 'creates an immutable ten-field tri-state snapshot' do
       snapshot = described_class.new(
         scheduler_present: true,
         fiber_blocking: false
@@ -92,16 +92,14 @@ RSpec.describe FiberAudit::Runtime::SchedulerSnapshot do
       expect(measurements[:scheduler_address_resolve_supported]).to be_nil
     end
 
-    it 'includes all five scheduler metadata fields' do
+    it 'includes all ten scheduler metadata fields' do
       snapshot = described_class.new(scheduler_present: false, fiber_blocking: true)
       measurements = snapshot.to_measurements
 
       expect(measurements.keys).to contain_exactly(
-        :scheduler_present,
-        :fiber_blocking,
-        :scheduler_io_select_supported,
-        :scheduler_process_wait_supported,
-        :scheduler_address_resolve_supported
+        :scheduler_present, :current_scheduler_present, :scheduler_snapshot_consistent, :fiber_blocking,
+        :scheduler_block_supported, :scheduler_kernel_sleep_supported, :scheduler_io_wait_supported,
+        :scheduler_io_select_supported, :scheduler_process_wait_supported, :scheduler_address_resolve_supported
       )
     end
   end
@@ -180,13 +178,7 @@ RSpec.describe FiberAudit::Runtime::SchedulerSnapshotCapture do
       allow(Fiber).to receive(:scheduler).and_raise(StandardError, 'test error')
 
       snapshot = described_class.capture
-      expect(snapshot.to_measurements).to eq(
-        scheduler_present: nil,
-        fiber_blocking: nil,
-        scheduler_io_select_supported: nil,
-        scheduler_process_wait_supported: nil,
-        scheduler_address_resolve_supported: nil
-      )
+      expect(snapshot.to_measurements.values).to all(be_nil)
     end
 
     it 'is deterministic for the same execution context' do

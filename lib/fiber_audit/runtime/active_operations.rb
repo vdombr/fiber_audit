@@ -11,6 +11,9 @@ module FiberAudit
     class ActiveOperations
       MAX_ENTRIES = 10_000
       MAX_SNAPSHOT = 100
+      INVOCATION_MEASUREMENT_KEYS = %i[
+        timeout_present timeout_zero endpoint_resolution_applicable
+      ].freeze
 
       Handle = Data.define(:pid, :thread_id, :fiber_id, :sequence)
       Entry = Data.define(
@@ -21,7 +24,8 @@ module FiberAudit
         :location,
         :execution_context,
         :started_monotonic_ns,
-        :scheduler_snapshot
+        :scheduler_snapshot,
+        :invocation_measurements
       )
       Snapshot = Data.define(:entries, :total_count) do
         def initialize(entries:, total_count:)
@@ -55,7 +59,8 @@ module FiberAudit
         execution_context: :unknown,
         thread: Thread.current,
         fiber: Fiber.current,
-        scheduler_snapshot: nil
+        scheduler_snapshot: nil,
+        invocation_measurements: {}
       )
         ensure_current_process!
         values = normalize_entry(
@@ -65,7 +70,8 @@ module FiberAudit
           monotonic_ns: monotonic_ns,
           thread: thread,
           fiber: fiber,
-          scheduler_snapshot: scheduler_snapshot
+          scheduler_snapshot: scheduler_snapshot,
+          invocation_measurements: invocation_measurements
         )
 
         @mutex.synchronize do
@@ -111,7 +117,8 @@ module FiberAudit
 
       private
 
-      def normalize_entry(operation:, location:, execution_context:, monotonic_ns:, thread:, fiber:, scheduler_snapshot: nil)
+      def normalize_entry(operation:, location:, execution_context:, monotonic_ns:, thread:, fiber:,
+                          scheduler_snapshot: nil, invocation_measurements: {})
         canonical_operation = Validation.operation(operation)
         unless location.nil? || location.is_a?(Location)
           raise RuntimeContractError, 'location must be a FiberAudit::Runtime::Location or nil'
@@ -131,8 +138,29 @@ module FiberAudit
           location: location,
           execution_context: normalized_context,
           started_monotonic_ns: Validation.integer(monotonic_ns, 'monotonic_ns'),
-          scheduler_snapshot: normalize_scheduler_snapshot(scheduler_snapshot)
+          scheduler_snapshot: normalize_scheduler_snapshot(scheduler_snapshot),
+          invocation_measurements: normalize_invocation_measurements(invocation_measurements)
         }
+      end
+
+      def normalize_invocation_measurements(value)
+        raise RuntimeContractError, 'invocation_measurements must be a Hash' unless value.is_a?(Hash)
+
+        normalized = {}
+        value.each do |key, measurement|
+          normalized_key = key.to_sym if key.is_a?(String) || key.is_a?(Symbol)
+          next unless INVOCATION_MEASUREMENT_KEYS.include?(normalized_key)
+          unless measurement.nil? || [true, false].include?(measurement)
+            raise RuntimeContractError, "#{normalized_key} must be a Boolean or nil"
+          end
+          if normalized.key?(normalized_key)
+            raise RuntimeContractError,
+                  "duplicate invocation measurement: #{normalized_key}"
+          end
+
+          normalized[normalized_key] = measurement
+        end
+        normalized.freeze
       end
 
       def normalize_scheduler_snapshot(value)

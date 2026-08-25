@@ -9,7 +9,7 @@ describe FiberAudit::Static::Rules::BuiltIns do
   it 'registers all shipped rules in identifier order' do
     ids = described_class.registry.map(&:id)
 
-    expect(ids).to eq(%w[FA1001 FA1002 FA1003 FA1004 FA1005 FA1006 FA1007])
+    expect(ids).to eq(%w[FA1001 FA1002 FA1003 FA1004 FA1005 FA1006 FA1007 FA1008])
   end
 
   it 'builds independent registries with injected dependencies' do
@@ -28,6 +28,6 @@ describe FiberAudit::Static::Rules::BuiltIns do
     )
 
     ids = described_class.registry.enabled_for(configuration).map { |rule| rule.class.id }
-    expect(ids).to eq(%w[FA1001 FA1002 FA1003 FA1005 FA1006 FA1007])
+    expect(ids).to eq(%w[FA1001 FA1002 FA1003 FA1005 FA1006 FA1007 FA1008])
   end
 end

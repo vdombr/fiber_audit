@@ -2,6 +2,39 @@
 
 ## Unreleased
 
+### Added
+
+- Added FA1008 for explicit `Fiber.new(blocking: true)` and `Fiber.blocking`
+  regions, with stronger lexical evidence when shared operation semantics identify
+  nested wait-capable calls.
+- Added runtime blocking-Fiber provenance and invocation-aware core/optional
+  scheduler evidence, including zero-timeout `IO.select` and privacy-safe
+  endpoint resolution applicability.
+- Added an opt-in bounded synchronization ownership/wait graph for Mutex,
+  Monitor, MonitorMixin, and ConditionVariable phases. Cycle candidates remain
+  evidence rather than unconditional deadlock conclusions.
+- Added an opt-in inherited-pipe process-progress monitor with nonblocking child
+  frames and a separate parent-owned runtime session.
+- Added supported-CRuby conformance for blocking/current scheduler behavior,
+  capability subsets, healthy-heartbeat wait cycles, and native work that retains
+  or releases the GVL, plus diagnostic graph/progress benchmark scenarios.
+
+### Changed
+
+- Runtime JSONL schema 1.1 is now the enhanced output contract and records
+  audited-process or parent-monitor role at session start; runtime JSONL 1.0
+  validation and its golden fixture remain intact, and static report schema 1.0
+  is unchanged.
+- Scheduler classification now evaluates immutable multi-capability profiles,
+  invocation applicability, and scheduler-snapshot consistency while preserving
+  nil as unknown.
+- Runtime lifecycle teardown now includes the optional graph and progress emitter
+  in reverse setup order; graph and process-progress observation remain disabled
+  by default.
+- Documented that parent-process silence, operation duration, scheduler overlap,
+  and synchronization cycles are bounded temporal/structural evidence, not proof
+  of causality, deadlock, complete coverage, or Fiber safety.
+
 ## 0.3.1 (2026-08-23)
 
 ### Added

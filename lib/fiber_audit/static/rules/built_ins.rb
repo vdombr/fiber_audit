@@ -8,6 +8,7 @@ require_relative 'thread_current_state'
 require_relative 'io_select'
 require_relative 'direct_socket'
 require_relative 'net_http_in_request'
+require_relative 'blocking_fiber_context'
 
 module FiberAudit
   module Static
@@ -20,7 +21,8 @@ module FiberAudit
           ThreadCurrentState,
           IOSelect,
           DirectSocket,
-          NetHTTPInRequest
+          NetHTTPInRequest,
+          BlockingFiberContext
         ].freeze
 
         module_function

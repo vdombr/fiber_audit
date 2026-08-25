@@ -13,7 +13,8 @@ RSpec.describe 'targeted runtime probe integration' do
     root,
     output,
     watchdog: FiberAudit::Runtime::WatchdogPolicy.new(enabled: false),
-    liveness: nil
+    liveness: nil,
+    graph: nil
   )
     policy = FiberAudit::Runtime::Policy.new(
       sampling_rate: 1.0,
@@ -30,6 +31,7 @@ RSpec.describe 'targeted runtime probe integration' do
       settings: settings,
       watchdog_policy: watchdog,
       operation_liveness_policy: liveness,
+      synchronization_graph_policy: graph,
       probes_enabled: true
     )
   end
@@ -347,6 +349,133 @@ RSpec.describe 'targeted runtime probe integration' do
       end
       expect(counts).to eq([1, 1]), operation_sets.inspect
       expect(streams.map { |path, _records| File.binread(path) }.join).not_to include('stage5_fork_probe')
+    end
+  end
+
+  it 'records nearest explicit blocking provenance without retaining application values' do
+    Dir.mktmpdir do |root|
+      output = File.join(root, 'runtime')
+      Dir.mkdir(output)
+      scenario = File.join(root, 'fiber_context_scenario.rb')
+      secret = 'fiber-context-private-value'
+      File.write(
+        scenario,
+        <<~RUBY
+          Fiber.new(blocking: true) do
+            IO.select([], [], [], 0)
+            Fiber.blocking do
+              IO.select([], [], [], 0)
+              '#{secret}'
+            end
+          end.resume
+        RUBY
+      )
+
+      _stdout, stderr, status = run_file(activation_environment(root, output), scenario)
+      records = sessions(output).first.last
+      selects = records.select do |record|
+        record.dig('payload', 'operation') == 'IO.select' &&
+          record.dig('payload', 'kind') == 'operation_completed'
+      end
+      bytes = sessions(output).map { |path, _records| File.binread(path) }.join
+
+      expect(status).to be_success, stderr
+      expect(records.map { |record| record.dig('payload', 'operation') }.compact)
+        .to include('Fiber.new(blocking: true)', 'Fiber.blocking')
+      expect(selects.map { |record| record.dig('payload', 'measurements', 'fiber_blocking_context_depth') })
+        .to eq([1, 2])
+      expect(selects.first.dig('payload', 'measurements')).to include(
+        'fiber_blocking_context_present' => true,
+        'fiber_blocking_context_fiber_new' => true,
+        'fiber_blocking_context_fiber_blocking' => false
+      )
+      expect(selects.last.dig('payload', 'measurements')).to include(
+        'fiber_blocking_context_present' => true,
+        'fiber_blocking_context_fiber_new' => false,
+        'fiber_blocking_context_fiber_blocking' => true
+      )
+      expect(bytes).not_to include(secret)
+    end
+  end
+
+  it 'emits synchronization graph evidence with opaque identities and no lock values' do
+    Dir.mktmpdir do |root|
+      output = File.join(root, 'runtime')
+      Dir.mkdir(output)
+      scenario = File.join(root, 'synchronization_graph_scenario.rb')
+      secret = 'private-lock-value'
+      File.write(
+        scenario,
+        <<~RUBY
+          require 'monitor'
+          mutex = Mutex.new
+          mutex.lock
+          '#{secret}'
+          mutex.unlock
+          monitor = Monitor.new
+          monitor.enter
+          monitor.exit
+        RUBY
+      )
+      graph = FiberAudit::Runtime::SynchronizationGraphPolicy.new(enabled: true)
+
+      _stdout, stderr, status = run_file(
+        activation_environment(root, output, graph: graph),
+        scenario
+      )
+      records = sessions(output).first.last
+      phases = records.select { |record| record.dig('payload', 'source') == 'synchronization_graph' }
+      bytes = sessions(output).map { |path, _records| File.binread(path) }.join
+
+      expect(status).to be_success, stderr
+      expect(phases.filter_map { |record| record.dig('payload', 'kind') }).to include(
+        'sync_graph_active', 'sync_wait_started'
+      )
+      expect(phases.flat_map { |record| record.dig('payload', 'measurements').values })
+        .to all(satisfy { |value| value.nil? || value == true || value == false || value.is_a?(Numeric) })
+      expect(bytes).not_to include(secret, 'object_id', '#<Mutex', '#<Monitor')
+    end
+  end
+
+  it 'writes enhanced audited-process evidence as scalar-only JSONL 1.1' do
+    Dir.mktmpdir do |root|
+      output = File.join(root, 'runtime')
+      Dir.mkdir(output)
+      scenario = File.join(root, 'enhanced_contract_scenario.rb')
+      secret = 'enhanced-runtime-private-value'
+      File.write(
+        scenario,
+        <<~RUBY
+          Fiber.new(blocking: true) do
+            IO.select([], [], [], 0)
+            '#{secret}'
+          end.resume
+        RUBY
+      )
+
+      _stdout, stderr, status = run_file(activation_environment(root, output), scenario)
+      records = sessions(output).first.last
+      completed = records.find do |record|
+        record.dig('payload', 'operation') == 'IO.select' &&
+          record.dig('payload', 'kind') == 'operation_completed'
+      end
+      measurements = completed.dig('payload', 'measurements')
+
+      expect(status).to be_success, stderr
+      expect(records.map { |record| record.fetch('schema_version') }.uniq).to eq(['1.1'])
+      expect(records.first.dig('payload', 'process_role')).to eq('audited_process')
+      expect(measurements).to include(
+        'timeout_present' => true,
+        'timeout_zero' => true,
+        'operation_optional_capability_applicable' => false,
+        'fiber_blocking_context_present' => true,
+        'fiber_blocking_context_fiber_new' => true
+      )
+      expect(measurements.values).to all(satisfy do |value|
+        value.nil? || value == true || value == false || value.is_a?(Numeric)
+      end)
+      bytes = sessions(output).map { |path, _records| File.binread(path) }.join
+      expect(bytes).not_to include(secret, scenario)
     end
   end
 end

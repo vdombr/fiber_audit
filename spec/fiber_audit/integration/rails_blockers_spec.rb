@@ -41,7 +41,7 @@ RSpec.describe 'rails blockers golden report' do
     )
     expect(fa1006.dig('evidence', 0, 'details')).to include(
       'semantic' => 'socket_resolve_connect',
-      'scheduler_capability' => 'address_resolve'
+      'scheduler_capability' => nil
     )
   end
 end

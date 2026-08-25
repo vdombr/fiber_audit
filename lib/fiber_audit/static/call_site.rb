@@ -2,16 +2,17 @@
 
 require_relative '../findings/location'
 require_relative '../findings/confidence'
+require_relative 'fiber_context'
 
 module FiberAudit
   module Static
     # CallSite represents a single method call extracted from source code.
-    # Carries exactly 13 fields as specified in the remediation plan.
+    # Carries FiberAudit-owned lexical context without dependency objects.
     CallSite = Data.define(
       :path, :line, :column,
       :receiver_source, :receiver_constant, :method_name,
       :arguments, :enclosing_symbol, :nesting,
-      :execution_context, :resolution, :confidence
+      :execution_context, :resolution, :confidence, :fiber_context
     ) do
       # Override initialize to ensure proper contract:
       # - method_name normalized to Symbol or nil
@@ -21,8 +22,12 @@ module FiberAudit
         path:, line:, column:,
         receiver_source:, receiver_constant:, method_name:,
         arguments:, enclosing_symbol:, nesting:,
-        execution_context:, resolution:, confidence:
+        execution_context:, resolution:, confidence:, fiber_context: nil
       )
+        unless fiber_context.nil? || fiber_context.is_a?(FiberContext)
+          raise ArgumentError, 'fiber_context must be a FiberAudit::Static::FiberContext or nil'
+        end
+
         # Normalize method_name to Symbol if it's a String, preserve nil
         method_name_value = case method_name
                             when String
@@ -53,7 +58,8 @@ module FiberAudit
           nesting: frozen_nesting,
           execution_context: execution_context,
           resolution: resolution,
-          confidence: validated_confidence
+          confidence: validated_confidence,
+          fiber_context: fiber_context
         )
       end
 

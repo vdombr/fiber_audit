@@ -4,6 +4,7 @@ require 'securerandom'
 require_relative 'clock'
 require_relative 'active_operations'
 require_relative 'environment'
+require_relative 'fiber_mode_context'
 require_relative 'execution_context'
 require_relative 'rails_integration'
 require_relative 'jsonl/writer'
@@ -16,6 +17,10 @@ require_relative 'watchdog'
 require_relative 'watchdog_policy'
 require_relative 'operation_liveness_monitor'
 require_relative 'operation_liveness_policy'
+require_relative 'synchronization_graph'
+require_relative 'synchronization_graph_policy'
+require_relative 'process_progress_emitter'
+require_relative 'process_progress_policy'
 
 module FiberAudit
   module Runtime
@@ -24,6 +29,8 @@ module FiberAudit
       attr_reader :settings, :owner_pid, :output_path, :recorder,
                   :watchdog, :active_operations, :watchdog_policy,
                   :operation_liveness_monitor, :operation_liveness_policy,
+                  :synchronization_graph, :synchronization_graph_policy,
+                  :process_progress_emitter, :process_progress_policy,
                   :redactor, :probe_registry, :execution_context_store,
                   :rails_integration
 
@@ -35,6 +42,9 @@ module FiberAudit
         settings:,
         watchdog_policy: nil,
         operation_liveness_policy: nil,
+        synchronization_graph_policy: nil,
+        process_progress_policy: nil,
+        process_progress_writer: nil,
         probes_enabled: false,
         clock: Clock.new,
         session_id_source: SecureRandom.method(:uuid),
@@ -43,12 +53,16 @@ module FiberAudit
         random: Sampler::RANDOM_SOURCE
       )
         validate_dependencies!(
-          settings, watchdog_policy, operation_liveness_policy, probes_enabled, clock,
+          settings, watchdog_policy, operation_liveness_policy, synchronization_graph_policy,
+          process_progress_policy, process_progress_writer, probes_enabled, clock,
           session_id_source, pid_source, writer_factory, random
         )
         @settings = settings
         @watchdog_policy = watchdog_policy
         @operation_liveness_policy = operation_liveness_policy
+        @synchronization_graph_policy = synchronization_graph_policy
+        @process_progress_policy = process_progress_policy
+        @process_progress_writer = process_progress_writer
         @probes_enabled = probes_enabled
         @clock = clock
         @session_id_source = session_id_source
@@ -85,6 +99,9 @@ module FiberAudit
         @state = :starting
         # Reset fiber-local context after fork
         ExecutionContext.reset!
+        FiberModeContext.after_fork!
+        # Preserve the inherited progress descriptor. The child must abandon
+        # observer objects but rebuild its emitter around the local descriptor.
         start_process_session!
         self
       rescue StandardError => e
@@ -111,13 +128,33 @@ module FiberAudit
 
       private
 
-      def validate_dependencies!(candidate_settings, watchdog, liveness, probes, candidate_clock,
-                                 session_ids, pids, writers, random)
+      # Constructor dependency validation is intentionally centralized at this lifecycle boundary.
+      # rubocop:disable Metrics/AbcSize, Metrics/CyclomaticComplexity, Metrics/PerceivedComplexity
+      def validate_dependencies!(
+        candidate_settings, watchdog, liveness, graph_policy, progress_policy, progress_writer,
+        probes, candidate_clock, session_ids, pids, writers, random
+      )
         unless candidate_settings.is_a?(Environment::Settings)
           raise RuntimeContractError, 'settings must be FiberAudit::Runtime::Environment::Settings'
         end
         unless watchdog.nil? || watchdog.is_a?(WatchdogPolicy)
           raise RuntimeContractError, 'watchdog_policy must be a FiberAudit::Runtime::WatchdogPolicy or nil'
+        end
+        unless progress_policy.nil? || progress_policy.is_a?(ProcessProgressPolicy)
+          raise RuntimeContractError, 'process_progress_policy must be a FiberAudit::Runtime::ProcessProgressPolicy or nil'
+        end
+        unless progress_writer.nil? || progress_writer.respond_to?(:write_nonblock)
+          raise RuntimeContractError, 'process_progress_writer must respond to write_nonblock or be nil'
+        end
+        if progress_policy&.enabled? && progress_writer.nil?
+          raise RuntimeContractError, 'enabled process progress requires a process_progress_writer'
+        end
+        if progress_writer && !progress_policy&.enabled?
+          raise RuntimeContractError, 'process_progress_writer requires an enabled process_progress_policy'
+        end
+        unless graph_policy.nil? || graph_policy.is_a?(SynchronizationGraphPolicy)
+          raise RuntimeContractError,
+                'synchronization_graph_policy must be a FiberAudit::Runtime::SynchronizationGraphPolicy or nil'
         end
         unless liveness.nil? || liveness.is_a?(OperationLivenessPolicy)
           raise RuntimeContractError,
@@ -135,12 +172,15 @@ module FiberAudit
           raise RuntimeContractError, "#{name} must respond to call" unless source.respond_to?(:call)
         end
       end
+      # rubocop:enable Metrics/AbcSize, Metrics/CyclomaticComplexity, Metrics/PerceivedComplexity
 
       def reset_process_components!
         @output_path = nil
         @recorder = nil
         @watchdog = nil
         @operation_liveness_monitor = nil
+        @synchronization_graph = nil
+        @process_progress_emitter = nil
         @scheduler_observer = nil
         @active_operations = nil
         @redactor = nil
@@ -178,11 +218,14 @@ module FiberAudit
       end
 
       def setup_runtime_observers!
+        FiberModeContext.reset! if @probes_enabled
         @active_operations = ActiveOperations.new(pid_source: @pid_source)
         @redactor = Redactor.new(root: settings.project_root, policy: settings.policy)
         @execution_context_store = ExecutionContext if @probes_enabled
+        setup_process_progress! if process_progress_policy
         setup_watchdog! if watchdog_policy
         setup_operation_liveness! if @probes_enabled && operation_liveness_policy
+        setup_synchronization_graph! if synchronization_graph_policy
         setup_rails_integration! if @probes_enabled
         setup_probes! if @probes_enabled
       rescue StandardError => e
@@ -194,6 +237,8 @@ module FiberAudit
         close_failed_startup!(e)
       end
 
+      # Teardown order mirrors setup and isolates failures for fail-open cleanup.
+      # rubocop:disable Metrics/MethodLength
       def deactivate_active_components!
         # Deactivate components in reverse order of setup
         begin
@@ -209,6 +254,13 @@ module FiberAudit
           nil
         ensure
           @rails_integration = nil
+        end
+        begin
+          @synchronization_graph&.stop
+        rescue StandardError
+          nil
+        ensure
+          @synchronization_graph = nil
         end
         begin
           @operation_liveness_monitor&.stop
@@ -228,6 +280,30 @@ module FiberAudit
           @scheduler_observer = nil
           @watchdog = nil
         end
+        begin
+          @process_progress_emitter&.stop
+        rescue StandardError
+          nil
+        ensure
+          @process_progress_emitter = nil
+        end
+      end
+      # rubocop:enable Metrics/MethodLength
+
+      def setup_process_progress!
+        @process_progress_emitter = ProcessProgressEmitter.new(
+          policy: process_progress_policy, recorder: recorder, writer: @process_progress_writer,
+          clock: @clock, pid_source: @pid_source
+        )
+      end
+
+      def stop_process_progress_emitter
+        process_progress_emitter&.stop
+        nil
+      rescue StandardError => e
+        e
+      ensure
+        @process_progress_emitter = nil
       end
 
       def setup_operation_liveness!
@@ -269,7 +345,17 @@ module FiberAudit
           execution_context_store: @execution_context_store,
           pid_source: @pid_source
         )
-        @probe_registry = Probes::Registry.activate(base: base)
+        @probe_registry = Probes::Registry.activate(
+          base: base,
+          synchronization_graph: synchronization_graph
+        )
+      end
+
+      def setup_synchronization_graph!
+        @synchronization_graph = SynchronizationGraph.new(
+          policy: synchronization_graph_policy, recorder: recorder, clock: @clock,
+          pid_source: @pid_source, supported: @probes_enabled
+        )
       end
 
       def close_failed_startup!(error)
@@ -301,13 +387,17 @@ module FiberAudit
 
       def stop_runtime_observers
         error = nil
+        component_error = stop_probe_registry
+        error ||= component_error
         component_error = stop_rails_integration
         error ||= component_error
-        component_error = stop_probe_registry
+        component_error = stop_synchronization_graph
         error ||= component_error
         component_error = stop_operation_liveness_monitor
         error ||= component_error
         component_error = stop_watchdog
+        error ||= component_error
+        component_error = stop_process_progress_emitter
         error ||= component_error
         recorder&.internal_error! if error
         error
@@ -329,6 +419,16 @@ module FiberAudit
         e
       ensure
         @probe_registry = nil
+        FiberModeContext.reset!
+      end
+
+      def stop_synchronization_graph
+        synchronization_graph&.stop
+        nil
+      rescue StandardError => e
+        e
+      ensure
+        @synchronization_graph = nil
       end
 
       def stop_operation_liveness_monitor

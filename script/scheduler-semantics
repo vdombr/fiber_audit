@@ -241,6 +241,33 @@ module SchedulerSemantics
     Fiber[:fiber_audit_probe] = nil
   end
 
+  def fiber_blocking_state
+    {
+      blocking: Fiber.new(blocking: true) { Fiber.current.blocking? }.resume,
+      nonblocking: Fiber.new(blocking: false) { Fiber.current.blocking? }.resume
+    }
+  end
+
+  def current_scheduler_state
+    scheduler = HookProbeScheduler.new
+    Fiber.set_scheduler(scheduler)
+    supported = Fiber.respond_to?(:current_scheduler)
+    blocking_current = Fiber.current_scheduler if supported
+    nonblocking_current = nil
+    Fiber.schedule do
+      nonblocking_current = Fiber.current_scheduler if supported
+    end
+
+    {
+      api_supported: supported,
+      scheduler_present: Fiber.scheduler.equal?(scheduler),
+      blocking_current_present: supported ? !blocking_current.nil? : nil,
+      nonblocking_current_equal: supported ? nonblocking_current.equal?(scheduler) : nil
+    }
+  ensure
+    Fiber.set_scheduler(nil) if Fiber.scheduler
+  end
+
   def rejected_scheduler_replacement
     scheduler = HookProbeScheduler.new
     Fiber.set_scheduler(scheduler)
@@ -265,6 +292,12 @@ results = {
   ruby: RUBY_DESCRIPTION,
   thread_join: SchedulerSemantics.bounded(:thread_join) { SchedulerSemantics.thread_join(:join) },
   thread_value: SchedulerSemantics.bounded(:thread_value) { SchedulerSemantics.thread_join(:value) },
+  fiber_blocking_state: SchedulerSemantics.bounded(:fiber_blocking_state) do
+    SchedulerSemantics.fiber_blocking_state
+  end,
+  current_scheduler_state: SchedulerSemantics.bounded(:current_scheduler_state) do
+    SchedulerSemantics.current_scheduler_state
+  end,
   mutex_lock: SchedulerSemantics.bounded(:mutex_lock) { SchedulerSemantics.mutex_contention(:lock) },
   mutex_synchronize: SchedulerSemantics.bounded(:mutex_synchronize) do
     SchedulerSemantics.mutex_contention(:synchronize)
@@ -292,7 +325,15 @@ expected_interrupt = if RUBY_VERSION.split('.').first.to_i >= 4
                      else
                        { supported: false, skipped: true }
                      end
+current_scheduler_supported = Fiber.respond_to?(:current_scheduler)
 expected = {
+  fiber_blocking_state: { blocking: true, nonblocking: false },
+  current_scheduler_state: {
+    api_supported: current_scheduler_supported,
+    scheduler_present: true,
+    blocking_current_present: current_scheduler_supported ? false : nil,
+    nonblocking_current_equal: current_scheduler_supported ? true : nil
+  },
   thread_join: :block,
   thread_value: :block,
   mutex_lock: :block,

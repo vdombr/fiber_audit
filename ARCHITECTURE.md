@@ -2,7 +2,7 @@
 
 FiberAudit audits Ruby and Rails applications for operations that may require cooperation from a Fiber scheduler. It publishes static hypotheses and bounded runtime evidence, but it does **not** prove that an application is fiber-safe and never emits an unconditional `PASS`.
 
-> **Repository status:** The static pipeline, explicit runtime probes, Rails execution context, truthful nullable scheduler snapshots, scheduler watchdog, operation-liveness monitor, shared operation semantics, and scalar scheduler classification are implemented. Combined static/runtime reporting remains future work.
+> **Repository status:** The static pipeline, FA1001–FA1008, explicit runtime probes, Rails execution context, invocation-aware scheduler evidence, scheduler watchdog, operation-liveness monitor, opt-in synchronization graph, and opt-in parent process-progress monitor are implemented. Combined static/runtime reporting remains future work.
 
 The gem installation requirement is Ruby `>= 3.3`. The tested platform contract is CRuby 3.3, 3.4, and 4.0 on Ubuntu Linux. Other engines and operating systems are not currently tested, and native Rubydex package availability remains a platform prerequisite.
 
@@ -14,11 +14,13 @@ The gem installation requirement is Ruby `>= 3.3`. The tested platform contract 
 | CLI and project discovery | Commands, root/config resolution, exit codes | Implemented |
 | Findings and fingerprints | Evidence-bearing values and stable identity | Implemented |
 | Configuration and suppressions | Strict static/runtime validation and post-analysis filtering | Implemented |
-| Static adapters and rules | Rubydex/Prism extraction and FA1001–FA1007 | Implemented |
+| Static adapters and rules | Rubydex/Prism extraction and FA1001–FA1008 | Implemented |
 | Reporters | Deterministic text and static JSON schema 1.0 | Implemented |
-| Runtime recorder and probes | Bounded JSONL 1.0 sessions and targeted operations | Implemented |
+| Runtime recorder and probes | Bounded JSONL 1.1 sessions and targeted operations | Implemented |
 | Scheduler watchdog | Heartbeat stalls and bounded operation overlap | Implemented |
 | Operation-liveness monitor | Independent bounded active-operation age evidence | Implemented |
+| Synchronization graph | Opt-in bounded ownership/wait/cycle-candidate evidence | Implemented |
+| Process-progress monitor | Opt-in inherited-pipe child progress and separate parent session | Implemented |
 | Shared operation semantics | Static/runtime semantic profiles and scalar classification | Implemented |
 | Combined reporting | Correlated static/runtime finding presentation | Future work |
 
@@ -44,10 +46,23 @@ runtime:
     enabled: true
     poll_interval_ms: 100
     long_active_threshold_ms: 1000
+  synchronization_graph:
+    enabled: false
+    max_identities: 4096
+    max_resources: 2048
+    max_wait_edges: 2048
+    max_cycle_depth: 64
+  process_progress:
+    enabled: false
+    heartbeat_interval_ms: 50
+    stall_threshold_ms: 250
+    max_processes: 1024
+    max_frames_per_poll: 256
+    max_buffer_bytes: 65536
   fail_open: true
 ```
 
-Runtime policy, watchdog policy, and operation-liveness policy are immutable FiberAudit-owned values. CLI activation transports watchdog and liveness policy in separate, exact-key, size-bounded JSON environment values. Missing transport keeps programmatic boot inert; explicit CLI runtime activation transports the configured policies and enables probes.
+Runtime, watchdog, operation-liveness, synchronization-graph, and process-progress policies are immutable FiberAudit-owned values. CLI activation transports exact-key, size-bounded JSON environment deltas. When process progress is enabled, the supervisor creates one private pipe, explicitly inherits only the writer descriptor, and owns a separate parent-monitor session. Missing activation transport keeps programmatic boot inert. Runtime JSONL schema 1.1 is a separate versioned contract; deterministic static reports remain on schema 1.0.
 
 ## Static rules
 
@@ -60,6 +75,9 @@ Runtime policy, watchdog policy, and operation-liveness policy are immutable Fib
 | FA1005 | `IO.select` scheduler capability requirement | medium |
 | FA1006 | Socket allocation and constructor endpoint semantics | low |
 | FA1007 | HTTP scheduler cooperation in request-like contexts | medium |
+| FA1008 | Explicit blocking-Fiber lexical regions | low/medium |
+
+FA1008 enriches FiberAudit-owned `CallSite` values with an immutable lexical blocking context; Prism/Rubydex nodes do not cross the adapter boundary. The rule emits one finding at each explicit region and raises advisory evidence depth only when shared `OperationSemantics` identifies nested wait-capable calls.
 
 FA1004 uses advisory medium severity because API/context evidence does not prove request-sensitive leakage. It never publishes thread-variable keys or values. FA1006 resolves shared constructor profiles but preserves rule ID and operation strings, so existing fingerprints remain stable.
 
@@ -72,33 +90,38 @@ CLI runtime command
   -> strict Environment settings
   -> conditional RUBYOPT boot
   -> one Lifecycle per process
-       -> owner-only Recorder / JSONL 1.0 session
+       -> owner-only Recorder / JSONL 1.1 session
        -> ActiveOperations registry
        -> targeted probe registry
        -> optional Rails integration
        -> scheduler Watchdog
        -> OperationLivenessMonitor
+       -> optional SynchronizationGraph
+       -> optional process-progress emitter
 ```
 
 Requiring `fiber_audit` or `fiber_audit/runtime/boot` without the activation marker starts no probes, fibers, threads, or file output. The top-level loader does not require Rails.
 
 ### Targeted observations and shared semantics
 
-Narrow idempotent prepend wrappers observe only canonical operations represented by FA1001–FA1007. `OperationSemantics` owns category, wait possibility, inventory-only status, and an optional relevant scheduler capability. Static rules and runtime classification consume the same immutable profiles.
+Narrow idempotent prepend wrappers observe only canonical operations represented by FA1001–FA1008. `OperationSemantics` owns immutable core/optional capability requirements and conditional applicability. Static rules and runtime classification consume the same profiles. Invocation shape is retained only as allowlisted Boolean/nil scalar measurements.
 
 `SchedulerEvidenceClassifier` adds only Boolean/nil measurements:
 
 ```text
 operation_wait_possible
 operation_inventory_only
-operation_scheduler_capability_required
-operation_scheduler_capability_supported
+operation_core_capability_required
+operation_core_capability_supported
+operation_optional_capability_required
+operation_optional_capability_applicable
+operation_optional_capability_supported
 operation_scheduler_cooperation_available
 ```
 
-No semantic category Symbol/String or nested classifier value enters JSONL 1.0. A true availability measurement means only that scheduler/Fiber evidence was compatible and, for an optional capability, the captured hook was supported. Required `block` and `kernel_sleep` capabilities are inferred from known scheduler presence rather than measured separately. This does not prove cooperation, progress, safety, or absence of scheduler harm.
+No semantic category Symbol/String or nested classifier value enters JSONL 1.1. A true availability measurement means only that scheduler/Fiber evidence was compatible and, for an optional capability, the captured hook was supported. Required `block` and `kernel_sleep` capabilities are inferred from known scheduler presence rather than measured separately. This does not prove cooperation, progress, safety, or absence of scheduler harm.
 
-Scheduler snapshots preserve actual `Fiber#blocking?` values. Capture failure produces an all-unknown snapshot; readers must preserve nil rather than coerce it to false. Snapshot and classifier fields are additive scalar measurements under the unchanged JSONL schema 1.0 envelope.
+Scheduler snapshots preserve actual `Fiber#blocking?` values. Capture failure produces an all-unknown snapshot; readers must preserve nil rather than coerce it to false. Snapshot and classifier fields are additive scalar measurements under the JSONL schema 1.1 envelope; schema 1.0 remains validatable.
 
 ### Scheduler watchdog
 
@@ -116,7 +139,7 @@ Targeted operations register before ordinary event sampling so watchdog and live
 
 Runtime values are allowlisted at capture time. Commands and arguments, URLs, addresses, hosts, ports, headers, bodies, payloads, return values, exception messages, environment secrets, and thread-variable keys/values are never retained. Only project-relative locations or explicit unknown/external sentinels are published.
 
-Shutdown deactivates Rails integration and probes before stopping the liveness monitor, then deactivates scheduler observation/stops the watchdog, and closes the recorder last. This prevents new registrations while open liveness pairs are closed. Fork rebinding closes only the inherited writer, discards inherited observer references without touching their locks or Threads, resets Fiber context, and constructs a new process-local session and observers.
+Shutdown follows reverse setup order: probes, Rails integration, synchronization graph, operation liveness, watchdog, process-progress emitter, then recorder. This prevents new registrations while open liveness pairs are closed. Fork rebinding closes only the inherited writer, discards inherited observer references without touching their locks or Threads, resets Fiber context, and constructs a new process-local session and observers.
 
 A successful `exec` may intentionally leave a valid incomplete session without `session_end`. Every reader must validate records with `Runtime::JSONL::Schema` and separately enforce stream ordering/session consistency.
 
@@ -124,7 +147,9 @@ A successful `exec` may intentionally leave a valid incomplete session without `
 
 `script/scheduler-semantics` behaviorally checks only capabilities consumed by FiberAudit: Process wait variants, coordination hooks, IO.select, localhost address resolution, storage semantics, scheduler replacement, and Ruby 4 IO-close interruption. Every case and the RSpec subprocess are bounded.
 
-`benchmark/runtime_probe_overhead.rb` runs absent, installed/inactive, active sampling-zero, and active sampling-one scenarios in isolated subprocesses. It reports timing and recorder accounting for local diagnosis. There is no CI wall-clock threshold; optimization requires benchmark evidence.
+`script/scheduler-semantics` and `spec/conformance` exercise blocking/current scheduler state, capability subsets, healthy-heartbeat ownership cycles, and held-versus-released native GVL work on supported CRuby versions. Every scenario is externally bounded. The native extension is built only in a disposable directory; CI requires it while unsupported local toolchains remain an explicit environment limitation.
+
+`benchmark/runtime_probe_overhead.rb` includes absent, installed/inactive, active sampling-zero, active sampling-one, graph-enabled, and parent-monitor scenarios. Results are diagnostic and impose no CI timing threshold.
 
 Remaining runtime work is combined static/runtime correlation and any separately approved coverage contract that could support stronger status semantics.
 

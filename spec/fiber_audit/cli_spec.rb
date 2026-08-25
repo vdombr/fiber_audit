@@ -65,11 +65,11 @@ RSpec.describe FiberAudit::CLI do
   end
 
   describe 'list-rules' do
-    it 'lists all seven built-in rules without running an audit' do
+    it 'lists all eight built-in rules without running an audit' do
       expect(FiberAudit::Audit).not_to receive(:new)
 
       expect(run_cli('list-rules')).to eq(0)
-      expect(stdout.string.scan(/FA100[1-7]/)).to eq(%w[FA1001 FA1002 FA1003 FA1004 FA1005 FA1006 FA1007])
+      expect(stdout.string.scan(/FA100[1-8]/)).to eq(%w[FA1001 FA1002 FA1003 FA1004 FA1005 FA1006 FA1007 FA1008])
     end
   end
 
@@ -124,9 +124,9 @@ RSpec.describe FiberAudit::CLI do
         expect(runtime_files(output).size).to eq(2)
         runtime_files(output).each do |path|
           records = File.readlines(path, chomp: true).map { |line| JSON.parse(line) }
-          expect(records.map { |record| record['record_type'] }).to eq(%w[session_start event event session_end])
+          expect(records.map { |record| record['record_type'] }).to eq(%w[session_start event event event session_end])
           expect(records.filter_map { |record| record.dig('payload', 'kind') })
-            .to eq(%w[watchdog_absent operation_liveness_active])
+            .to eq(%w[watchdog_absent operation_liveness_active sync_graph_disabled])
           expect(File.stat(path).mode & 0o777).to eq(0o600)
         end
       end
@@ -157,6 +157,76 @@ RSpec.describe FiberAudit::CLI do
       end
     end
 
+    it 'creates separate audited-process and parent-monitor sessions when progress is enabled' do
+      with_runtime_project do |root|
+        File.write(
+          File.join(root, '.fiber-audit.yml'),
+          <<~YAML
+            runtime:
+              process_progress:
+                enabled: true
+                heartbeat_interval_ms: 10
+                stall_threshold_ms: 50
+          YAML
+        )
+        output = File.join(root, 'sessions')
+
+        expect(run_cli('runtime', '--out', output, '--', RbConfig.ruby, '-e', 'sleep 0.03', cwd: root)).to eq(0)
+        sessions = runtime_files(output).map do |path|
+          File.readlines(path, chomp: true).map { |line| JSON.parse(line) }
+        end
+        roles = sessions.map { |records| records.first.dig('payload', 'process_role') }
+
+        expect(roles).to contain_exactly('audited_process', 'parent_monitor')
+        parent = sessions.find { |records| records.first.dig('payload', 'process_role') == 'parent_monitor' }
+        expect(parent.filter_map { |record| record.dig('payload', 'kind') }).to include(
+          'process_progress_monitor_active',
+          'process_progress_process_observed',
+          'process_progress_monitor_completed'
+        )
+        expect(runtime_files(output)).to all(satisfy { |path| (File.stat(path).mode & 0o777) == 0o600 })
+      end
+    end
+
+    it 'tracks fork/exec progress independently and tolerates an incomplete pre-exec session' do
+      skip 'fork is unavailable' unless Process.respond_to?(:fork)
+
+      with_runtime_project do |root|
+        File.write(
+          File.join(root, '.fiber-audit.yml'),
+          <<~YAML
+            runtime:
+              process_progress:
+                enabled: true
+                heartbeat_interval_ms: 10
+                stall_threshold_ms: 100
+          YAML
+        )
+        output = File.join(root, 'sessions')
+        script = <<~RUBY
+          require 'rbconfig'
+          child = fork { exec(RbConfig.ruby, '-e', 'sleep 0.03') }
+          Process.wait(child)
+        RUBY
+
+        expect(run_cli('runtime', '--out', output, '--', RbConfig.ruby, '-e', script, cwd: root)).to eq(0)
+        sessions = runtime_files(output).map do |path|
+          File.readlines(path, chomp: true).map { |line| JSON.parse(line) }
+        end
+        parent = sessions.find { |records| records.first.dig('payload', 'process_role') == 'parent_monitor' }
+        observed_pids = parent.filter_map do |record|
+          record.dig('payload', 'measurements', 'process_pid')
+        end.uniq
+
+        expect(observed_pids.size).to be >= 2
+        audited = sessions.reject { |records| records.equal?(parent) }
+        expect(audited).to include(
+          satisfy { |records| records.none? { |record| record['record_type'] == 'session_end' } }
+        )
+        expect(sessions.join).not_to include(script)
+      end
+    end
+
     it 'records default watchdog and liveness states for each Ruby child' do
       with_runtime_project do |root|
         output = File.join(root, 'sessions')
@@ -167,9 +237,9 @@ RSpec.describe FiberAudit::CLI do
         runtime_files(output).each do |path|
           records = File.readlines(path, chomp: true).map { |line| JSON.parse(line) }
           expect(records.map { |record| record['record_type'] })
-            .to eq(%w[session_start event event session_end])
+            .to eq(%w[session_start event event event session_end])
           expect(records.filter_map { |record| record.dig('payload', 'kind') })
-            .to eq(%w[watchdog_absent operation_liveness_active])
+            .to eq(%w[watchdog_absent operation_liveness_active sync_graph_disabled])
           expect(File.stat(path).mode & 0o777).to eq(0o600)
         end
       end
@@ -320,6 +390,8 @@ RSpec.describe FiberAudit::CLI do
         expect(configuration.min_severity).to eq(:critical)
         expect(configuration.runtime_policy).to equal(policy)
         expect(configuration.runtime_watchdog_policy).to equal(watchdog_policy)
+        expect(configuration.runtime_synchronization_graph_policy)
+          .to equal(FiberAudit::Runtime::SynchronizationGraphPolicy::DISABLED)
         expect(root).to eq(File.realpath(File.join(fixtures, 'poro_clean')))
         audit
       end

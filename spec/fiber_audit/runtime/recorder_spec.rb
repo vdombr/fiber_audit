@@ -47,7 +47,9 @@ RSpec.describe FiberAudit::Runtime::Recorder do
   end
 
   def build_recorder(policy: FiberAudit::Runtime::Policy.new(sampling_rate: 1.0),
-                     io: StringIO.new, random: -> { 0.0 }, monotonic: nil)
+                     io: StringIO.new, random: -> { 0.0 }, monotonic: nil,
+                     schema_version: FiberAudit::Runtime::Session::CURRENT_SCHEMA_VERSION,
+                     process_role: :audited_process)
     tick = 100
     monotonic ||= lambda {
       tick += 1
@@ -56,6 +58,8 @@ RSpec.describe FiberAudit::Runtime::Recorder do
       id: session_id,
       started_at: started_at,
       started_monotonic_ns: 100,
+      schema_version: schema_version,
+      process_role: process_role,
       policy: policy,
       tool_version: '0.2.0',
       ruby_version: '3.4.9'
@@ -69,6 +73,25 @@ RSpec.describe FiberAudit::Runtime::Recorder do
       monotonic: monotonic
     )
     [described_class.start(session: session, writer: writer, clock: clock, random: random), io]
+  end
+
+  it 'uses one schema version for every record and marks the session role once' do
+    recorder, io = build_recorder(process_role: :parent_monitor)
+    expect(recorder.record { build_event }).to eq(:emitted)
+    recorder.close
+    records = io.string.lines.map { |line| JSON.parse(line) }
+    expect(records.map { |record| record['schema_version'] }.uniq).to eq(['1.1'])
+    expect(records.first.dig('payload', 'process_role')).to eq('parent_monitor')
+    expect(records.drop(1)).to all(satisfy { |record| !record.fetch('payload').key?('process_role') })
+  end
+
+  it 'can still write a complete schema 1.0 session without adding a role field' do
+    recorder, io = build_recorder(schema_version: '1.0')
+    expect(recorder.record { build_event }).to eq(:emitted)
+    recorder.close
+    records = io.string.lines.map { |line| JSON.parse(line) }
+    expect(records.map { |record| record['schema_version'] }.uniq).to eq(['1.0'])
+    expect(records.first.fetch('payload')).not_to have_key('process_role')
   end
 
   it 'writes one ordered start, event, and end session' do

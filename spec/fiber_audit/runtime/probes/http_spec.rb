@@ -41,6 +41,21 @@ RSpec.describe FiberAudit::Runtime::Probes::HTTP do
     end
   end
 
+  it 'derives endpoint applicability without retaining URI or host values' do
+    numeric = URI('http://127.0.0.1/private')
+    named = URI('https://privacy-sentinel.example/private')
+
+    expect(described_class.target_measurements(numeric)).to eq(endpoint_resolution_applicable: false)
+    expect(described_class.target_measurements(named)).to eq(endpoint_resolution_applicable: true)
+    expect(described_class.target_measurements(Object.new)).to eq(endpoint_resolution_applicable: nil)
+    expect(described_class.target_measurements(named).to_s).not_to include('privacy-sentinel')
+
+    http = Net::HTTP.new('privacy-sentinel.example', 80)
+    expect(described_class.connection_measurements(http)).to eq(endpoint_resolution_applicable: true)
+    http.instance_variable_set(:@started, true)
+    expect(described_class.connection_measurements(http)).to eq(endpoint_resolution_applicable: false)
+  end
+
   it 'preserves Net::HTTP.get_response objects' do
     body = 'get-response-stage5-secret'
     with_http_server(body) do |url|

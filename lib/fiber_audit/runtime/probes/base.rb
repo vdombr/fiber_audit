@@ -3,6 +3,7 @@
 require_relative '../active_operations'
 require_relative '../clock'
 require_relative '../event'
+require_relative '../fiber_mode_context'
 require_relative '../execution_context'
 require_relative '../rails_integration'
 require_relative '../recorder'
@@ -121,6 +122,8 @@ module FiberAudit
           with_guard do
             canonical_operation = Validation.operation(operation)
             normalized_measurements = normalize_measurements(measurements)
+                                      .merge(FiberModeContext.measurements)
+                                      .freeze
             started_ns = clock.monotonic_ns
             location = project_callsite
             next unless location
@@ -136,7 +139,8 @@ module FiberAudit
               execution_context: captured_context,
               thread: thread,
               fiber: fiber,
-              scheduler_snapshot: captured_scheduler_snapshot
+              scheduler_snapshot: captured_scheduler_snapshot,
+              invocation_measurements: normalized_measurements
             )
             Observation.new(
               operation: canonical_operation,
@@ -246,7 +250,8 @@ module FiberAudit
           values.merge!(
             SchedulerEvidenceClassifier.measurements(
               operation: observation.operation,
-              scheduler_snapshot: snapshot
+              scheduler_snapshot: snapshot,
+              invocation_measurements: observation.measurements
             )
           )
           values

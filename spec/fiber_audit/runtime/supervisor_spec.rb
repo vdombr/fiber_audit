@@ -142,6 +142,51 @@ RSpec.describe FiberAudit::Runtime::Supervisor do
     end
   end
 
+  it 'inherits only the private progress writer and always stops the parent monitor' do
+    Dir.mktmpdir do |root|
+      output = File.join(root, 'runtime')
+      Dir.mkdir(output)
+      settings = FiberAudit::Runtime::Environment.build(
+        policy: FiberAudit::Runtime::Policy.new,
+        output_directory: output,
+        project_root: root
+      )
+      policy = FiberAudit::Runtime::ProcessProgressPolicy.new(enabled: true)
+      status = status_class.new(0, nil, :exited)
+      adapter = Class.new do
+        attr_reader :spawn_arguments
+
+        define_method(:spawn) do |environment, command, cwd, inherited_io: nil|
+          @spawn_arguments = [environment, command, cwd, inherited_io]
+          4321
+        end
+        define_method(:wait2) { |pid| [pid, status] }
+        define_method(:trap) { |_signal, handler = nil, &block| block ? 'previous' : handler }
+        define_method(:kill) { |_signal, _pid| nil }
+      end.new
+      monitor = instance_double(FiberAudit::Runtime::ProcessProgressMonitor, stop: nil)
+      supervisor = described_class.new(
+        command: ['ruby', '-e', 'exit 0'], environment: {}, cwd: root,
+        settings: settings, process_progress_policy: policy, adapter: adapter,
+        monitor_factory: lambda do |policy:, settings:, reader:|
+          expect(policy).to equal(policy)
+          expect(settings).to equal(settings)
+          expect(reader).not_to be_closed
+          monitor
+        end
+      )
+
+      expect(supervisor.run).to eq(0)
+      child_environment, _command, _cwd, inherited = adapter.spawn_arguments
+      expect(child_environment).to include(
+        FiberAudit::Runtime::Environment::PROCESS_PROGRESS_SETTINGS_KEY,
+        FiberAudit::Runtime::Environment::PROCESS_PROGRESS_WRITER_FD_KEY
+      )
+      expect(inherited).to be_closed
+      expect(monitor).to have_received(:stop)
+    end
+  end
+
   it 'executes command arguments without shell interpolation' do
     Dir.mktmpdir do |directory|
       marker = File.join(directory, 'marker')

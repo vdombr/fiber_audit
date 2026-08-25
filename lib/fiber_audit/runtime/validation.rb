@@ -9,7 +9,9 @@ module FiberAudit
       UUID = /\A[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\z/
       CONTROL = /[[:cntrl:]]/
       OPERATION = /\A(?:::)?[A-Z][A-Za-z0-9_]*(?:::[A-Z][A-Za-z0-9_]*)*(?:[.#](?:[a-zA-Z_][a-zA-Z0-9_]*[!?=]?|\[\]=?))\z/
-      SPECIAL_OPERATIONS = %w[Thread.current.[] Thread.current.[]=].freeze
+      SPECIAL_OPERATIONS = [
+        'Thread.current.[]', 'Thread.current.[]=', 'Fiber.new(blocking: true)'
+      ].freeze
 
       module_function
 
