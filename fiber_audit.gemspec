@@ -23,7 +23,8 @@ Gem::Specification.new do |spec|
     'ARCHITECTURE.md',
     'CHANGELOG.md',
     'LICENSE',
-    '.fiber-audit.example.yml'
+    '.fiber-audit.example.yml',
+    'doc/**/*'
   ]
   spec.bindir        = 'bin'
   spec.executables   = ['fiber-audit']
