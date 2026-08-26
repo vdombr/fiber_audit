@@ -52,6 +52,7 @@ Statuses are `FAIL`, `REVIEW`, `PASS_WITH_WARNINGS`, or `NO_FINDINGS`; there is 
 ## Documentation
 
 - [Installation and project discovery](doc/installation.md)
+- [Examples](doc/examples.md)
 - [Static command reference](doc/static-command.md)
 - [Configuration reference](doc/configuration.md)
 - [Suppressions](doc/suppressions.md)
@@ -62,6 +63,7 @@ Statuses are `FAIL`, `REVIEW`, `PASS_WITH_WARNINGS`, or `NO_FINDINGS`; there is 
 - [Runtime watchdog and liveness](doc/runtime-watchdog-and-liveness.md)
 - [Runtime synchronization graph](doc/runtime-synchronization-graph.md)
 - [Runtime process progress](doc/runtime-process-progress.md)
+- [Troubleshooting and FAQ](doc/troubleshooting.md)
 - [Maintainer validation](doc/maintainer-validation.md)
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for implementation boundaries, privacy and lifecycle contracts, and future-work status.
